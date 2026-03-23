@@ -1,0 +1,351 @@
+package cli
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+const (
+	// DefaultConfigFile is the default config filename used by the CLI.
+	DefaultConfigFile = "langgraph.json"
+)
+
+// Config describes a project-level CLI configuration.
+type Config struct {
+	Name   string            `json:"name,omitempty"`
+	Graphs map[string]string `json:"graphs,omitempty"`
+
+	Dependencies    []string `json:"dependencies,omitempty"`
+	DockerfileLines []string `json:"dockerfile_lines,omitempty"`
+
+	Store        map[string]any `json:"store,omitempty"`
+	Auth         map[string]any `json:"auth,omitempty"`
+	HTTP         map[string]any `json:"http,omitempty"`
+	UI           map[string]any `json:"ui,omitempty"`
+	Webhooks     map[string]any `json:"webhooks,omitempty"`
+	Checkpointer map[string]any `json:"checkpointer,omitempty"`
+
+	DisablePersistence bool `json:"disable_persistence,omitempty"`
+
+	PythonVersion string `json:"python_version,omitempty"`
+	NodeVersion   string `json:"node_version,omitempty"`
+	PIPConfigFile string `json:"pip_config_file,omitempty"`
+
+	Server ServerConfig `json:"server,omitempty"`
+	Run    RunConfig    `json:"run,omitempty"`
+
+	EnvFile string            `json:"env_file,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+}
+
+// ServerConfig contains server connectivity and startup options.
+type ServerConfig struct {
+	URL     string `json:"url,omitempty"`
+	Command string `json:"command,omitempty"`
+}
+
+// RunConfig contains default run parameters.
+type RunConfig struct {
+	AssistantID string `json:"assistant_id,omitempty"`
+	ThreadID    string `json:"thread_id,omitempty"`
+}
+
+// LoadConfig reads and validates config from a file path.
+// Empty configPath resolves to DefaultConfigFile in cwd.
+func LoadConfig(configPath string) (*Config, string, error) {
+	if strings.TrimSpace(configPath) == "" {
+		configPath = DefaultConfigFile
+	}
+	abs, err := filepath.Abs(configPath)
+	if err != nil {
+		return nil, "", err
+	}
+	b, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, "", fmt.Errorf("invalid JSON in %s: %w", abs, err)
+	}
+
+	cfg := defaultConfig()
+	if err := decodeKnown(raw, &cfg); err != nil {
+		return nil, "", err
+	}
+	if len(cfg.Graphs) == 0 {
+		return nil, "", fmt.Errorf("config %s: graphs must not be empty", abs)
+	}
+	if cfg.Server.URL == "" {
+		cfg.Server.URL = "http://127.0.0.1:8080"
+	}
+	if cfg.Server.Command == "" {
+		cfg.Server.Command = "go run ./cmd/server"
+	}
+	if cfg.Run.ThreadID == "" {
+		cfg.Run.ThreadID = "default"
+	}
+	if cfg.Name == "" {
+		cfg.Name = filepath.Base(filepath.Dir(abs))
+	}
+
+	if err := validateConfig(cfg); err != nil {
+		return nil, "", err
+	}
+	return &cfg, abs, nil
+}
+
+// ResolveEnv returns merged env vars from config inline map and env file.
+// Inline map wins on conflicts.
+func ResolveEnv(cfg *Config, configFilePath string) (map[string]string, error) {
+	out := map[string]string{}
+	if cfg == nil {
+		return out, nil
+	}
+	if cfg.EnvFile != "" {
+		base := filepath.Dir(configFilePath)
+		path := cfg.EnvFile
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(base, path)
+		}
+		vars, err := parseDotEnv(path)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range vars {
+			out[k] = v
+		}
+	}
+	for k, v := range cfg.Env {
+		out[k] = v
+	}
+
+	if err := appendJSONEnv(out, "GOGRAPHGO_STORE", cfg.Store); err != nil {
+		return nil, err
+	}
+	if err := appendJSONEnv(out, "GOGRAPHGO_AUTH", cfg.Auth); err != nil {
+		return nil, err
+	}
+	if err := appendJSONEnv(out, "GOGRAPHGO_HTTP", cfg.HTTP); err != nil {
+		return nil, err
+	}
+	if err := appendJSONEnv(out, "GOGRAPHGO_UI", cfg.UI); err != nil {
+		return nil, err
+	}
+	if err := appendJSONEnv(out, "GOGRAPHGO_WEBHOOKS", cfg.Webhooks); err != nil {
+		return nil, err
+	}
+	if err := appendJSONEnv(out, "GOGRAPHGO_CHECKPOINTER", cfg.Checkpointer); err != nil {
+		return nil, err
+	}
+	if len(cfg.Dependencies) > 0 {
+		if err := appendJSONEnv(out, "GOGRAPHGO_DEPENDENCIES", cfg.Dependencies); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.DisablePersistence {
+		out["GOGRAPHGO_DISABLE_PERSISTENCE"] = "true"
+	}
+	return out, nil
+}
+
+// GraphIDs returns sorted graph IDs in config.
+func GraphIDs(cfg *Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	out := make([]string, 0, len(cfg.Graphs))
+	for id := range cfg.Graphs {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func defaultConfig() Config {
+	return Config{
+		Graphs: map[string]string{},
+		Env:    map[string]string{},
+	}
+}
+
+func decodeKnown(raw map[string]json.RawMessage, cfg *Config) error {
+	if v, ok := raw["name"]; ok {
+		if err := json.Unmarshal(v, &cfg.Name); err != nil {
+			return fmt.Errorf("invalid name: %w", err)
+		}
+	}
+	if v, ok := raw["graphs"]; ok {
+		if err := json.Unmarshal(v, &cfg.Graphs); err != nil {
+			return fmt.Errorf("invalid graphs: %w", err)
+		}
+	}
+	if v, ok := raw["dependencies"]; ok {
+		if err := json.Unmarshal(v, &cfg.Dependencies); err != nil {
+			return fmt.Errorf("invalid dependencies: %w", err)
+		}
+	}
+	if v, ok := raw["dockerfile_lines"]; ok {
+		if err := json.Unmarshal(v, &cfg.DockerfileLines); err != nil {
+			return fmt.Errorf("invalid dockerfile_lines: %w", err)
+		}
+	}
+	if v, ok := raw["store"]; ok {
+		if err := json.Unmarshal(v, &cfg.Store); err != nil {
+			return fmt.Errorf("invalid store: %w", err)
+		}
+	}
+	if v, ok := raw["auth"]; ok {
+		if err := json.Unmarshal(v, &cfg.Auth); err != nil {
+			return fmt.Errorf("invalid auth: %w", err)
+		}
+	}
+	if v, ok := raw["http"]; ok {
+		if err := json.Unmarshal(v, &cfg.HTTP); err != nil {
+			return fmt.Errorf("invalid http: %w", err)
+		}
+	}
+	if v, ok := raw["ui"]; ok {
+		if err := json.Unmarshal(v, &cfg.UI); err != nil {
+			return fmt.Errorf("invalid ui: %w", err)
+		}
+	}
+	if v, ok := raw["webhooks"]; ok {
+		if err := json.Unmarshal(v, &cfg.Webhooks); err != nil {
+			return fmt.Errorf("invalid webhooks: %w", err)
+		}
+	}
+	if v, ok := raw["checkpointer"]; ok {
+		if err := json.Unmarshal(v, &cfg.Checkpointer); err != nil {
+			return fmt.Errorf("invalid checkpointer: %w", err)
+		}
+	}
+	if v, ok := raw["disable_persistence"]; ok {
+		if err := json.Unmarshal(v, &cfg.DisablePersistence); err != nil {
+			return fmt.Errorf("invalid disable_persistence: %w", err)
+		}
+	}
+	if v, ok := raw["python_version"]; ok {
+		if err := json.Unmarshal(v, &cfg.PythonVersion); err != nil {
+			return fmt.Errorf("invalid python_version: %w", err)
+		}
+	}
+	if v, ok := raw["node_version"]; ok {
+		if err := json.Unmarshal(v, &cfg.NodeVersion); err != nil {
+			return fmt.Errorf("invalid node_version: %w", err)
+		}
+	}
+	if v, ok := raw["pip_config_file"]; ok {
+		if err := json.Unmarshal(v, &cfg.PIPConfigFile); err != nil {
+			return fmt.Errorf("invalid pip_config_file: %w", err)
+		}
+	}
+	if v, ok := raw["server"]; ok {
+		if err := json.Unmarshal(v, &cfg.Server); err != nil {
+			return fmt.Errorf("invalid server: %w", err)
+		}
+	}
+	if v, ok := raw["run"]; ok {
+		if err := json.Unmarshal(v, &cfg.Run); err != nil {
+			return fmt.Errorf("invalid run: %w", err)
+		}
+	}
+	if v, ok := raw["env_file"]; ok {
+		if err := json.Unmarshal(v, &cfg.EnvFile); err != nil {
+			return fmt.Errorf("invalid env_file: %w", err)
+		}
+	}
+
+	if v, ok := raw["env"]; ok {
+		var envMap map[string]string
+		if err := json.Unmarshal(v, &envMap); err == nil {
+			cfg.Env = envMap
+		} else {
+			var envFile string
+			if err := json.Unmarshal(v, &envFile); err != nil {
+				return fmt.Errorf("invalid env: expected object or string path")
+			}
+			cfg.EnvFile = envFile
+		}
+	}
+	return nil
+}
+
+func validateConfig(cfg Config) error {
+	if strings.TrimSpace(cfg.PythonVersion) != "" {
+		return fmt.Errorf("python_version is not supported by the Go runtime; remove this field")
+	}
+	if strings.TrimSpace(cfg.NodeVersion) != "" {
+		return fmt.Errorf("node_version is not supported by the Go runtime; remove this field")
+	}
+	if strings.TrimSpace(cfg.PIPConfigFile) != "" {
+		return fmt.Errorf("pip_config_file is not supported by the Go runtime; remove this field")
+	}
+
+	for id, p := range cfg.Graphs {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("graphs key must not be empty")
+		}
+		if strings.TrimSpace(p) == "" {
+			return fmt.Errorf("graph %q path must not be empty", id)
+		}
+		if !strings.Contains(p, ":") {
+			return fmt.Errorf("graph %q path must use '<path>:<symbol>' format", id)
+		}
+	}
+	if cfg.Server.URL != "" && !strings.HasPrefix(cfg.Server.URL, "http://") && !strings.HasPrefix(cfg.Server.URL, "https://") {
+		return fmt.Errorf("server.url must start with http:// or https://")
+	}
+	for i, dep := range cfg.Dependencies {
+		if strings.TrimSpace(dep) == "" {
+			return fmt.Errorf("dependencies[%d] must not be empty", i)
+		}
+	}
+	for i, line := range cfg.DockerfileLines {
+		if strings.TrimSpace(line) == "" {
+			return fmt.Errorf("dockerfile_lines[%d] must not be empty", i)
+		}
+	}
+	return nil
+}
+
+func appendJSONEnv(out map[string]string, key string, value any) error {
+	if value == nil {
+		return nil
+	}
+	b, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", key, err)
+	}
+	out[key] = string(b)
+	return nil
+}
+
+func parseDotEnv(path string) (map[string]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read env file %s: %w", path, err)
+	}
+	lines := strings.Split(string(b), "\n")
+	out := map[string]string{}
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid env assignment at %s:%d", path, i+1)
+		}
+		k := strings.TrimSpace(parts[0])
+		v := strings.TrimSpace(parts[1])
+		v = strings.Trim(v, `"`)
+		out[k] = v
+	}
+	return out, nil
+}

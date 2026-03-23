@@ -1,0 +1,53 @@
+{
+  "Config": {
+    "ThreadID": "thread-golden",
+    "CheckpointID": "cp-003",
+    "CheckpointNS": ""
+  },
+  "Checkpoint": {
+    "V": 1,
+    "ID": "cp-003",
+    "TS": "2026-03-22T00:00:03Z",
+    "ChannelValues": {
+      "counter": 3,
+      "messages": [
+        "hello",
+        "world",
+        "!"
+      ]
+    },
+    "ChannelVersions": {
+      "counter": 3,
+      "messages": 3
+    },
+    "VersionsSeen": {
+      "node-a": {
+        "counter": 3,
+        "messages": 3
+      }
+    },
+    "PendingSends": [
+      "send-3"
+    ]
+  },
+  "Metadata": {
+    "Source": "loop",
+    "Step": 1,
+    "Parents": null,
+    "RunID": "run-123"
+  },
+  "ParentConfig": {
+    "ThreadID": "thread-golden",
+    "CheckpointID": "cp-002",
+    "CheckpointNS": ""
+  },
+  "PendingWrites": [
+    {
+      "TaskID": "task-1",
+      "Channel": "messages",
+      "Value": {
+        "delta": "ok"
+      }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "assistant_id": "assistant-conformance",
+  "created_at": "<ts>",
+  "ended_at": "<ts>",
+  "input": {
+    "message": "hello"
+  },
+  "metadata": {
+    "suite": "phase9"
+  },
+  "output": {
+    "text": "ok:hello"
+  },
+  "run_id": "<run_id>",
+  "started_at": "<ts>",
+  "status": "success",
+  "thread_id": "thread-conformance"
+}

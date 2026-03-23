@@ -1,0 +1,9 @@
+{
+  "before_cp_004": [
+    "cp-003",
+    "cp-002",
+    "cp-001"
+  ],
+  "latest": "cp-004",
+  "resume_checkpoint": "cp-002"
+}

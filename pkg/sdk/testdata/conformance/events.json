@@ -1,0 +1,32 @@
+[
+  {
+    "payload": {
+      "status": "pending"
+    },
+    "run_id": "<run_id>",
+    "thread_id": "thread-conformance",
+    "timestamp": "<ts>",
+    "type": "run.created"
+  },
+  {
+    "payload": {
+      "status": "running"
+    },
+    "run_id": "<run_id>",
+    "thread_id": "thread-conformance",
+    "timestamp": "<ts>",
+    "type": "run.started"
+  },
+  {
+    "payload": {
+      "output": {
+        "text": "ok:hello"
+      },
+      "status": "success"
+    },
+    "run_id": "<run_id>",
+    "thread_id": "thread-conformance",
+    "timestamp": "<ts>",
+    "type": "run.completed"
+  }
+]

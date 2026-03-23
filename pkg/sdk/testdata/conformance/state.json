@@ -1,0 +1,13 @@
+{
+  "checkpoint_id": "<checkpoint_id>",
+  "created_at": "<ts>",
+  "metadata": {
+    "run_id": "<run_id>",
+    "source": "loop",
+    "step": 1
+  },
+  "thread_id": "thread-conformance",
+  "values": {
+    "last": "hello"
+  }
+}

@@ -1,0 +1,28 @@
+[
+  {
+    "Checkpoint": {
+      "ChannelValues": {
+        "last": "hello"
+      },
+      "ChannelVersions": {},
+      "ID": "<checkpoint_id>",
+      "PendingSends": null,
+      "TS": "<ts>",
+      "V": 1,
+      "VersionsSeen": {}
+    },
+    "Config": {
+      "CheckpointID": "<checkpoint_id>",
+      "CheckpointNS": "",
+      "ThreadID": "thread-conformance"
+    },
+    "Metadata": {
+      "Parents": null,
+      "RunID": "<run_id>",
+      "Source": "loop",
+      "Step": 1
+    },
+    "ParentConfig": null,
+    "PendingWrites": null
+  }
+]

@@ -1,0 +1,143 @@
+version: "2"
+
+linters:
+  # Start from a clean slate — explicitly opt in to what we want.
+  default: none
+  enable:
+    # Correctness
+    - errcheck       # unchecked errors
+    - govet          # go vet checks (shadow, printf, composites, etc.)
+    - staticcheck    # SA* / S* / ST* checks (go static analysis suite)
+    - ineffassign    # assignments whose result is never used
+    - unused         # exported identifiers that are never referenced
+
+    # Style / maintainability
+    - gofmt          # formatting (belt-and-suspenders alongside the fmt job)
+    - goimports      # import grouping and formatting
+    - misspell       # common spelling mistakes in comments and strings
+    - godot          # comments should end with a period
+    - revive         # drop-in replacement for golint with more rules
+    - gocritic       # opinionated but useful style checks
+
+    # Safety
+    - gosec          # security-sensitive patterns (G1xx–G7xx)
+    - noctx          # HTTP requests without context.Context
+    - bodyclose      # HTTP response bodies not closed
+
+    # Complexity / hygiene
+    - cyclop         # cyclomatic complexity
+    - gocognit       # cognitive complexity
+    - dupl           # near-duplicate code blocks
+    - goconst        # repeated string literals that should be constants
+
+linters-settings:
+  errcheck:
+    # Ignore errors returned by fmt.Print* — common in examples and tests.
+    exclude-functions:
+      - fmt.Print
+      - fmt.Println
+      - fmt.Printf
+      - fmt.Fprint
+      - fmt.Fprintln
+      - fmt.Fprintf
+
+  govet:
+    enable-all: true
+    disable:
+      - shadow       # too noisy; err shadowing is idiomatic in Go
+
+  staticcheck:
+    checks:
+      - "all"
+      - "-ST1000"    # package comments — we follow Go stdlib style, not godoc strict
+      - "-ST1020"    # exported functions need comments — too noisy during early dev
+
+  revive:
+    rules:
+      - name: exported
+        disabled: true # same as ST1020 — relax during early development
+      - name: var-naming
+        arguments: [["ID", "URL", "HTTP", "API", "SQL", "JSON", "RPC", "IO"]]
+      - name: unused-parameter
+        disabled: false
+      - name: unreachable-code
+        disabled: false
+      - name: early-return
+        disabled: false
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+    disabled-checks:
+      - hugeParam     # we rely on value semantics for state structs intentionally
+      - rangeValCopy  # same reason
+
+  cyclop:
+    max-complexity: 15  # default 10 is tight for graph traversal logic
+
+  gocognit:
+    min-complexity: 20  # default 30; tighter for new code
+
+  dupl:
+    threshold: 120  # lines of code before flagging duplication
+
+  goconst:
+    min-len: 3
+    min-occurrences: 4  # only flag strings repeated 4+ times
+
+  godot:
+    scope: declarations  # only check exported declaration comments
+    period: true
+
+  goimports:
+    local-prefixes: github.com/SkinnyPeteTheGiraffe/gographgo
+
+  gosec:
+    excludes:
+      - G115   # integer overflow — too noisy for normal Go math
+      - G304   # file path from variable — intentional in checkpoint backends
+
+  misspell:
+    locale: US
+
+issues:
+  # Don't limit the number of issues reported.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+  exclude-rules:
+    # Test files get a relaxed set — error checks, magic numbers, etc.
+    - path: "_test\\.go$"
+      linters:
+        - errcheck
+        - goconst
+        - gosec
+        - dupl
+        - gocognit
+        - cyclop
+
+    # Example files are for illustration — allow fmt.Print* and loose style.
+    - path: "^examples/"
+      linters:
+        - errcheck
+        - gocritic
+        - revive
+
+    # Internal packages are not part of the public API contract.
+    - path: "^internal/"
+      linters:
+        - godot
+
+  # Exclude well-known false-positive patterns.
+  exclude:
+    # G103/G104: use of unsafe and unhandled errors in defer — common in stdlib usage.
+    - "G103:"
+    - "Error return value of `.*\\.Close` is not checked"
+    - "Error return value of `.*\\.Flush` is not checked"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
