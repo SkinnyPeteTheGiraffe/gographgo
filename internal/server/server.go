@@ -520,10 +520,10 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request, threadID stri
 
 	s.publishEvent(threadID, run.ID, RunEvent{Type: "run.created", ThreadID: threadID, RunID: run.ID, Timestamp: now, Payload: map[string]any{"status": string(RunStatusPending)}})
 
-	go s.executeRun(context.Background(), run.ID, threadID)
-
 	w.Header().Set("Content-Location", fmt.Sprintf("/v1/threads/%s/runs/%s", threadID, run.ID))
 	writeJSON(w, http.StatusAccepted, run)
+
+	go s.executeRun(context.Background(), run.ID, threadID)
 }
 
 func (s *Server) createRunLocked(threadID string, req CreateRunRequest) *Run {
