@@ -187,7 +187,7 @@ func TestMultiMigrator(t *testing.T) {
 }
 
 func TestMultiMigrator_StopsOnError(t *testing.T) {
-	errMigrator := CheckpointMigratorFunc(func(checkpoint map[string]any) error {
+	errMigrator := CheckpointMigratorFunc(func(_ map[string]any) error {
 		return fmt.Errorf("migration error")
 	})
 

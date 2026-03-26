@@ -32,6 +32,7 @@ type pregelTaskResult struct {
 	node         string
 	path         []any
 	checkpointNS string
+	tags         []string
 	writes       []pregelWrite
 	interrupts   []Interrupt // interrupts raised inside the node via Interrupt()
 	err          error
@@ -48,6 +49,7 @@ type pregelTask[State any] struct {
 	path         []any
 	checkpointNS string
 	triggers     []string
+	tags         []string
 	input        any
 	inputSchema  any
 	cacheKey     *CacheKey

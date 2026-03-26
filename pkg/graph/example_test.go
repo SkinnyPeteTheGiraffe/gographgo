@@ -10,15 +10,15 @@ import (
 
 // Example demonstrates basic graph usage.
 func ExampleStateGraph() {
-	// Create graph builder using map[string]any for state
+	// Create a graph builder using map[string]any for state
 	builder := graph.NewStateGraph[map[string]any]()
 
 	// Add nodes
-	builder.AddNode("init", func(ctx context.Context, state map[string]any) (graph.NodeResult, error) {
+	builder.AddNode("init", func(_ context.Context, state map[string]any) (graph.NodeResult, error) {
 		return graph.NodeWrites(graph.DynMap(map[string]any{"count": 0})), nil
 	})
 
-	builder.AddNode("add_item", func(ctx context.Context, state map[string]any) (graph.NodeResult, error) {
+	builder.AddNode("add_item", func(_ context.Context, state map[string]any) (graph.NodeResult, error) {
 		count := 0
 		if c, ok := state["count"]; ok {
 			count = c.(int)
@@ -35,9 +35,9 @@ func ExampleStateGraph() {
 	})
 
 	// Add edges
-	builder.AddEdge(graph.START, "init")
+	builder.AddEdge(graph.Start, "init")
 	builder.AddEdge("init", "add_item")
-	builder.AddEdge("add_item", graph.END)
+	builder.AddEdge("add_item", graph.End)
 
 	// Compile graph
 	g, err := builder.Compile()

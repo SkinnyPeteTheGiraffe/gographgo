@@ -16,6 +16,6 @@ func (RemainingStepsManager) Get(scratchpad *PregelScratchpad) any {
 
 type CurrentUnixTimestampManager struct{}
 
-func (CurrentUnixTimestampManager) Get(scratchpad *PregelScratchpad) any {
+func (CurrentUnixTimestampManager) Get(_ *PregelScratchpad) any {
 	return time.Now().Unix()
 }

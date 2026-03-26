@@ -30,7 +30,7 @@ func resumeConfig(metadata map[string]any) (map[string]Dynamic, []Dynamic, bool,
 		resumeValues []Dynamic
 	)
 
-	if raw, ok := metadata[CONFIG_KEY_RESUME_MAP]; ok {
+	if raw, ok := metadata[ConfigKeyResumeMap]; ok {
 		rm, err := normalizeResumeMap(raw)
 		if err != nil {
 			return nil, nil, false, err
@@ -38,7 +38,7 @@ func resumeConfig(metadata map[string]any) (map[string]Dynamic, []Dynamic, bool,
 		resumeMap = rm
 	}
 
-	if raw, ok := metadata[CONFIG_KEY_RESUME]; ok {
+	if raw, ok := metadata[ConfigKeyResume]; ok {
 		values, err := normalizeResumeValues(raw)
 		if err != nil {
 			return nil, nil, false, err
@@ -63,7 +63,7 @@ func normalizeResumeMap(raw any) (map[string]Dynamic, error) {
 			}
 			return out, nil
 		}
-		return nil, fmt.Errorf("%s must be map[string]any or map[string]Dynamic, got %T", CONFIG_KEY_RESUME_MAP, raw)
+		return nil, fmt.Errorf("%s must be map[string]any or map[string]Dynamic, got %T", ConfigKeyResumeMap, raw)
 	}
 	out := make(map[string]Dynamic, len(rm))
 	for k, v := range rm {
@@ -270,14 +270,14 @@ func applyResumeWrites(
 				}
 			}
 			if !matched {
-				return pending, nil, fmt.Errorf("%s contains unknown interrupt id %q", CONFIG_KEY_RESUME_MAP, id)
+				return pending, nil, fmt.Errorf("%s contains unknown interrupt id %q", ConfigKeyResumeMap, id)
 			}
 		}
 	}
 
 	if len(resumeValues) > 0 {
 		if len(unresolved) > 1 {
-			return pending, nil, fmt.Errorf("multiple pending interrupts require %s with interrupt ids", CONFIG_KEY_RESUME_MAP)
+			return pending, nil, fmt.Errorf("multiple pending interrupts require %s with interrupt ids", ConfigKeyResumeMap)
 		}
 		updates = append(updates, checkpoint.PendingWrite{
 			TaskID:  unresolved[0].TaskID,

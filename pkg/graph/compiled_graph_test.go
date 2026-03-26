@@ -87,9 +87,9 @@ func Test_DurabilityModes(t *testing.T) {
 		g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 			return NodeWrites(map[string]Dynamic{"b": Dyn(2)}), nil
 		})
-		g.AddEdge(START, "a")
+		g.AddEdge(Start, "a")
 		g.AddEdge("a", "b")
-		g.AddEdge("b", END)
+		g.AddEdge("b", End)
 		compiled, err := g.Compile()
 		if err != nil {
 			t.Fatalf("compile: %v", err)
@@ -135,8 +135,8 @@ func Test_BulkUpdateState(t *testing.T) {
 	g.AddNode("noop", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "noop")
-	g.AddEdge("noop", END)
+	g.AddEdge(Start, "noop")
+	g.AddEdge("noop", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -208,8 +208,8 @@ func Test_GetStateHistory(t *testing.T) {
 	g.AddNode("noop", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "noop")
-	g.AddEdge("noop", END)
+	g.AddEdge(Start, "noop")
+	g.AddEdge("noop", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -280,8 +280,8 @@ func Test_GetStateHistory_NoCheckpointer(t *testing.T) {
 	g.AddNode("noop", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "noop")
-	g.AddEdge("noop", END)
+	g.AddEdge(Start, "noop")
+	g.AddEdge("noop", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -304,8 +304,8 @@ func Test_GetStateHistory_Empty(t *testing.T) {
 	g.AddNode("noop", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "noop")
-	g.AddEdge("noop", END)
+	g.AddEdge(Start, "noop")
+	g.AddEdge("noop", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -328,8 +328,8 @@ func Test_ReplayFromCheckpointIgnoresInput(t *testing.T) {
 	g.AddNode("pass", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 		return NodeState(Dyn(state)), nil
 	})
-	g.AddEdge(START, "pass")
-	g.AddEdge("pass", END)
+	g.AddEdge(Start, "pass")
+	g.AddEdge("pass", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -373,8 +373,8 @@ func Test_SubgraphNodeNamespaces(t *testing.T) {
 	childBuilder.AddNode("child_work", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(map[string]Dynamic{"child": Dyn("ok")}), nil
 	})
-	childBuilder.AddEdge(START, "child_work")
-	childBuilder.AddEdge("child_work", END)
+	childBuilder.AddEdge(Start, "child_work")
+	childBuilder.AddEdge("child_work", End)
 	child, err := childBuilder.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
 		t.Fatalf("compile child: %v", err)
@@ -382,8 +382,8 @@ func Test_SubgraphNodeNamespaces(t *testing.T) {
 
 	parentBuilder := NewStateGraph[map[string]any]()
 	parentBuilder.AddNodeFunc("child_node", child.AsSubgraphNode("child_node"))
-	parentBuilder.AddEdge(START, "child_node")
-	parentBuilder.AddEdge("child_node", END)
+	parentBuilder.AddEdge(Start, "child_node")
+	parentBuilder.AddEdge("child_node", End)
 	parent, err := parentBuilder.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
 		t.Fatalf("compile parent: %v", err)
@@ -431,8 +431,8 @@ func Test_SubgraphNodeNamespaces_StatefulModeUsesNodeScope(t *testing.T) {
 		}
 		return NodeWrites(map[string]Dynamic{"sub_count": Dyn(count + 1)}), nil
 	})
-	childBuilder.AddEdge(START, "child_work")
-	childBuilder.AddEdge("child_work", END)
+	childBuilder.AddEdge(Start, "child_work")
+	childBuilder.AddEdge("child_work", End)
 	child, err := childBuilder.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
 		t.Fatalf("compile child: %v", err)
@@ -443,8 +443,8 @@ func Test_SubgraphNodeNamespaces_StatefulModeUsesNodeScope(t *testing.T) {
 	parentBuilder.AddNode("child_node", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 		return statefulChild(ctx, map[string]any{"seed": true})
 	})
-	parentBuilder.AddEdge(START, "child_node")
-	parentBuilder.AddEdge("child_node", END)
+	parentBuilder.AddEdge(Start, "child_node")
+	parentBuilder.AddEdge("child_node", End)
 	parent, err := parentBuilder.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
 		t.Fatalf("compile parent: %v", err)
@@ -485,8 +485,8 @@ func Test_SubgraphNodeOptions_DisableCheckpointer(t *testing.T) {
 	childBuilder.AddNode("child_work", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(map[string]Dynamic{"child": Dyn("ok")}), nil
 	})
-	childBuilder.AddEdge(START, "child_work")
-	childBuilder.AddEdge("child_work", END)
+	childBuilder.AddEdge(Start, "child_work")
+	childBuilder.AddEdge("child_work", End)
 	child, err := childBuilder.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
 		t.Fatalf("compile child: %v", err)
@@ -497,8 +497,8 @@ func Test_SubgraphNodeOptions_DisableCheckpointer(t *testing.T) {
 		Persistence:         SubgraphPersistenceTaskScope,
 		DisableCheckpointer: true,
 	}))
-	parentBuilder.AddEdge(START, "child_node")
-	parentBuilder.AddEdge("child_node", END)
+	parentBuilder.AddEdge(Start, "child_node")
+	parentBuilder.AddEdge("child_node", End)
 	parent, err := parentBuilder.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
 		t.Fatalf("compile parent: %v", err)
@@ -525,8 +525,8 @@ func TestGetState_FullSnapshot(t *testing.T) {
 	g.AddNode("work", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"done": true})), nil
 	})
-	g.AddEdge(START, "work")
-	g.AddEdge("work", END)
+	g.AddEdge(Start, "work")
+	g.AddEdge("work", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -594,9 +594,9 @@ func TestGetState_InterruptBefore(t *testing.T) {
 	g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"ran": "b"})), nil
 	})
-	g.AddEdge(START, "a")
+	g.AddEdge(Start, "a")
 	g.AddEdge("a", "b")
-	g.AddEdge("b", END)
+	g.AddEdge("b", End)
 
 	compiled, err := g.Compile(CompileOptions{
 		Checkpointer:    saver,
@@ -667,8 +667,8 @@ func TestGetState_UserInterrupt(t *testing.T) {
 		iv := NewInterrupt(Dyn("need input"), "ask-interrupt")
 		panic(nodeInterruptSignal{interrupt: iv})
 	})
-	g.AddEdge(START, "ask")
-	g.AddEdge("ask", END)
+	g.AddEdge(Start, "ask")
+	g.AddEdge("ask", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -713,8 +713,8 @@ func TestGetState_ParentConfig(t *testing.T) {
 	g.AddNode("step", func(ctx context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "step")
-	g.AddEdge("step", END)
+	g.AddEdge(Start, "step")
+	g.AddEdge("step", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {

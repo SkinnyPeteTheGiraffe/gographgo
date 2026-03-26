@@ -18,7 +18,7 @@ type ToolsConditionOptions[State any] struct {
 	OnToolCalls graph.Route
 
 	// OnNoToolCalls is returned when there are no pending tool calls.
-	// Defaults to routing to `END`.
+	// Defaults to routing to `End`.
 	OnNoToolCalls graph.Route
 }
 
@@ -27,13 +27,13 @@ type ToolsConditionOptions[State any] struct {
 func ToolsConditionWithOptions[State any](state State, options ToolsConditionOptions[State]) graph.Route {
 	messages := extractToolsConditionMessages(state, options.Messages)
 	if len(messages) == 0 {
-		return fallbackToolsRoute(options.OnNoToolCalls, graph.RouteTo(graph.END))
+		return fallbackToolsRoute(options.OnNoToolCalls, graph.RouteTo(graph.End))
 	}
 	last := messages[len(messages)-1]
 	if last.Role == "assistant" && len(last.ToolCalls) > 0 {
 		return fallbackToolsRoute(options.OnToolCalls, graph.RouteTo(toolsNodeName))
 	}
-	return fallbackToolsRoute(options.OnNoToolCalls, graph.RouteTo(graph.END))
+	return fallbackToolsRoute(options.OnNoToolCalls, graph.RouteTo(graph.End))
 }
 
 func extractToolsConditionMessages[State any](state State, extractor func(State) []Message) []Message {

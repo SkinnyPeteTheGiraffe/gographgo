@@ -55,9 +55,9 @@ func TestPushAndDeleteUIMessage_StreamAndState(t *testing.T) {
 		_, cmd := DeleteUIMessage(ctx, state.UI[0].ID, UIDeleteOptions{})
 		return NodeCommand(cmd), nil
 	})
-	g.AddEdge(START, "show")
+	g.AddEdge(Start, "show")
 	g.AddEdge("show", "hide")
-	g.AddEdge("hide", END)
+	g.AddEdge("hide", End)
 
 	compiled, err := g.Compile()
 	if err != nil {

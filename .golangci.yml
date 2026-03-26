@@ -1,26 +1,36 @@
 version: "2"
-run:
-  modules-download-mode: readonly
-  tests: true
+
 linters:
+  # Start from a clean slate — explicitly opt in to what we want.
+  default: none
   enable:
-    - bodyclose
-    - cyclop
-    - dupl
-    - gocognit
-    - goconst
-    - gocritic
-    - godot
-    - gosec
-    - misspell
-    - noctx
-    - revive
+    # Correctness
+    - errcheck       # unchecked errors
+    - govet          # go vet checks (shadow, printf, composites, etc.)
+    - staticcheck    # SA* / S* / ST* checks (go static analysis suite)
+    - ineffassign    # assignments whose result is never used
+    - unused         # exported identifiers that are never referenced
+
+    # Style / maintainability
+    - misspell       # common spelling mistakes in comments and strings
+    - godot          # comments should end with a period
+    - revive         # drop-in replacement for golint with more rules
+    - gocritic       # opinionated but useful style checks
+
+    # Safety
+    - gosec          # security-sensitive patterns (G1xx–G7xx)
+    - noctx          # HTTP requests without context.Context
+    - bodyclose      # HTTP response bodies not closed
+
+    # Complexity / hygiene
+    - cyclop         # cyclomatic complexity
+    - gocognit       # cognitive complexity
+    - dupl           # near-duplicate code blocks
+    - goconst        # repeated string literals that should be constants
+
   settings:
-    cyclop:
-      max-complexity: 15
-    dupl:
-      threshold: 120
     errcheck:
+      # Ignore errors returned by fmt.Print* — common in examples and tests.
       exclude-functions:
         - fmt.Print
         - fmt.Println
@@ -28,105 +38,114 @@ linters:
         - fmt.Fprint
         - fmt.Fprintln
         - fmt.Fprintf
-    gocognit:
-      min-complexity: 20
-    goconst:
-      min-len: 3
-      min-occurrences: 4
-    gocritic:
-      disabled-checks:
-        - hugeParam
-        - rangeValCopy
-      enabled-tags:
-        - diagnostic
-        - style
-        - performance
-    godot:
-      scope: declarations
-      period: true
-    gosec:
-      excludes:
-        - G115
-        - G304
+
     govet:
-      disable:
-        - shadow
       enable-all: true
-    misspell:
-      locale: US
+      disable:
+        - shadow       # too noisy; err shadowing is idiomatic in Go
+
+    staticcheck:
+      checks:
+        - "all"
+        - "-ST1000"    # package comments — we follow Go stdlib style, not godoc strict
+        - "-ST1020"    # exported functions need comments — too noisy during early dev
+
     revive:
       rules:
         - name: exported
-          disabled: true
+          disabled: true # same as ST1020 — relax during early development
         - name: var-naming
-          arguments:
-            - - ID
-              - URL
-              - HTTP
-              - API
-              - SQL
-              - JSON
-              - RPC
-              - IO
+          arguments: [["ID", "URL", "HTTP", "API", "SQL", "JSON", "RPC", "IO"]]
         - name: unused-parameter
           disabled: false
         - name: unreachable-code
           disabled: false
         - name: early-return
           disabled: false
-    staticcheck:
-      checks:
-        - all
-        - -ST1000
-        - -ST1020
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - hugeParam     # we rely on value semantics for state structs intentionally
+        - rangeValCopy  # same reason
+
+    cyclop:
+      max-complexity: 15  # default 10 is tight for graph traversal logic
+
+    gocognit:
+      min-complexity: 20  # default 30; tighter for new code
+
+    dupl:
+      threshold: 120  # lines of code before flagging duplication
+
+    goconst:
+      min-len: 3
+      min-occurrences: 4  # only flag strings repeated 4+ times
+
+    godot:
+      scope: declarations  # only check exported declaration comments
+      period: true
+
+    gosec:
+      excludes:
+        - G115   # integer overflow — too noisy for normal Go math
+        - G304   # file path from variable — intentional in checkpoint backends
+
+    misspell:
+      locale: US
+
   exclusions:
-    generated: lax
-    presets:
-      - comments
-      - common-false-positives
-      - legacy
-      - std-error-handling
+    # Test files get a relaxed set — error checks, magic numbers, etc.
     rules:
-      - linters:
-          - cyclop
-          - dupl
+      - path: "_test\\.go$"
+        linters:
           - errcheck
-          - gocognit
           - goconst
           - gosec
-        path: _test\.go$
-      - linters:
+          - dupl
+          - gocognit
+          - cyclop
+
+      # Example files are for illustration — allow fmt.Print* and loose style.
+      - path: "^examples/"
+        linters:
           - errcheck
           - gocritic
           - revive
-        path: ^examples/
-      - linters:
+
+      # Internal packages are not part of the public API contract.
+      - path: "^internal/"
+        linters:
           - godot
-        path: ^internal/
-      - path: (.+)\.go$
-        text: 'G103:'
-      - path: (.+)\.go$
-        text: Error return value of `.*\.Close` is not checked
-      - path: (.+)\.go$
-        text: Error return value of `.*\.Flush` is not checked
-    paths:
-      - third_party$
-      - builtin$
-      - examples$
-issues:
-  max-issues-per-linter: 0
-  max-same-issues: 0
+
+      # Exclude well-known false-positive patterns.
+      # G103/G104: use of unsafe and unhandled errors in defer — common in stdlib usage.
+      - path: ".*\\.go$"
+        text: "G103:"
+      - path: ".*\\.go$"
+        text: "Error return value of `.*\\.Close` is not checked"
+      - path: ".*\\.go$"
+        text: "Error return value of `.*\\.Flush` is not checked"
+
 formatters:
   enable:
-    - gofmt
-    - goimports
+    - gofmt          # formatting (belt-and-suspenders alongside the fmt job)
+    - goimports      # import grouping and formatting
+
   settings:
     goimports:
       local-prefixes:
         - github.com/SkinnyPeteTheGiraffe/gographgo
-  exclusions:
-    generated: lax
-    paths:
-      - third_party$
-      - builtin$
-      - examples$
+
+issues:
+  # Don't limit the number of issues reported.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly

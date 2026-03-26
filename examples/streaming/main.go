@@ -40,10 +40,10 @@ func main() {
 	builder.AddNode("step_b", makeCounterNode("step_b"))
 	builder.AddNode("step_c", makeCounterNode("step_c"))
 
-	builder.AddEdge(graph.START, "step_a")
+	builder.AddEdge(graph.Start, "step_a")
 	builder.AddEdge("step_a", "step_b")
 	builder.AddEdge("step_b", "step_c")
-	builder.AddEdge("step_c", graph.END)
+	builder.AddEdge("step_c", graph.End)
 
 	compiled, err := builder.Compile()
 	if err != nil {

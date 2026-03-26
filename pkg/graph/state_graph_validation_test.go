@@ -13,7 +13,7 @@ func TestStateGraph_AddNodeRejectsReservedAndInvalidNames(t *testing.T) {
 	}
 
 	assertPanicsWith(t, "reserved", func() {
-		g.AddNode(START, nodeFn)
+		g.AddNode(Start, nodeFn)
 	})
 	assertPanicsWith(t, "reserved character", func() {
 		g.AddNode("bad|node", nodeFn)
@@ -60,8 +60,8 @@ func TestStateGraph_ValidateAllowsAllInterruptSentinel(t *testing.T) {
 	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 
 	if _, err := g.Compile(CompileOptions{InterruptBefore: []string{All}, InterruptAfter: []string{All}}); err != nil {
 		t.Fatalf("compile with All interrupt sentinel: %v", err)
@@ -73,8 +73,8 @@ func TestStateGraph_CompileUsesBuilderInterruptDefaults(t *testing.T) {
 	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 	g.SetInterruptBefore("n")
 	g.SetInterruptAfter("n")
 
@@ -98,9 +98,9 @@ func TestStateGraph_CompileOptionInterruptsOverrideBuilderDefaults(t *testing.T)
 	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "a")
+	g.AddEdge(Start, "a")
 	g.AddEdge("a", "b")
-	g.AddEdge("b", END)
+	g.AddEdge("b", End)
 	g.SetInterruptBefore("a")
 	g.SetInterruptAfter("a")
 
@@ -121,8 +121,8 @@ func TestStateGraph_ValidateRejectsReservedChannelIdentifiers(t *testing.T) {
 	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 	g.channels[pregelError] = NewLastValue()
 
 	if _, err := g.Compile(); err == nil || !strings.Contains(err.Error(), "channel name") {
@@ -135,8 +135,8 @@ func TestStateGraph_ValidateRejectsUnknownDeclaredDestinations(t *testing.T) {
 	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 	g.nodes["n"].Destinations = append(g.nodes["n"].Destinations, "missing")
 
 	if _, err := g.Compile(); err == nil || !strings.Contains(err.Error(), "declares unknown destination") {

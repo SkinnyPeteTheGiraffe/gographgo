@@ -88,9 +88,9 @@ func (introspectionRunner) GraphInfo(_ context.Context, graphID string) (graphpk
 	g.AddNode("worker", func(_ context.Context, state map[string]any) (graphpkg.NodeResult, error) {
 		return graphpkg.NoNodeResult(), nil
 	})
-	g.AddEdge(graphpkg.START, "router")
+	g.AddEdge(graphpkg.Start, "router")
 	g.AddEdge("router", "worker")
-	g.AddEdge("worker", graphpkg.END)
+	g.AddEdge("worker", graphpkg.End)
 	g.SetNodeSubgraphs("router", "decision")
 	compiled, err := g.Compile(graphpkg.CompileOptions{Name: graphID})
 	if err != nil {

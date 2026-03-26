@@ -45,6 +45,7 @@ type TaskContext[State any] struct {
 	Path         []any
 	CheckpointNS string
 	Triggers     []string
+	Tags         []string
 	Input        State
 	IsPush       bool
 	InputSchema  any

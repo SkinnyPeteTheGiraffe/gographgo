@@ -28,9 +28,9 @@ func TestStateGraphBasic(t *testing.T) {
 	})
 
 	// Add edges
-	builder.AddEdge(START, "increment")
+	builder.AddEdge(Start, "increment")
 	builder.AddEdge("increment", "append_name")
-	builder.AddEdge("append_name", END)
+	builder.AddEdge("append_name", End)
 
 	// Compile
 	graph, err := builder.Compile()
@@ -70,7 +70,7 @@ func TestStateGraphValidation(t *testing.T) {
 	builder.AddNode("node1", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	builder.AddEdge("node1", END)
+	builder.AddEdge("node1", End)
 
 	err := builder.Validate(nil)
 	if err == nil {
@@ -82,7 +82,7 @@ func TestStateGraphValidation(t *testing.T) {
 	builder2.AddNode("node1", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	builder2.AddEdge(START, "unknown")
+	builder2.AddEdge(Start, "unknown")
 
 	err = builder2.Validate(nil)
 	if err == nil {
@@ -101,8 +101,8 @@ func TestStateGraphStream(t *testing.T) {
 		return NodeWrites(DynMap(map[string]any{"count": count * 2})), nil
 	})
 
-	builder.AddEdge(START, "double")
-	builder.AddEdge("double", END)
+	builder.AddEdge(Start, "double")
+	builder.AddEdge("double", End)
 
 	graph, err := builder.Compile()
 	if err != nil {

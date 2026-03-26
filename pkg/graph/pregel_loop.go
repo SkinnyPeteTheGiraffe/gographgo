@@ -40,7 +40,7 @@ type pregelLoopOptions[State, Context, Input, Output any] struct {
 //
 //  1. Map input to channels.
 //  2. Ensure the TASKS channel (Topic) exists for Send fan-out.
-//  3. Prepare the initial task set (nodes triggered by START).
+//  3. Prepare the initial task set (nodes triggered by Start).
 //  4. Repeat each superstep:
 //     a. Check interrupt-before.
 //     b. Execute all tasks concurrently.
@@ -152,7 +152,7 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 		}
 	}
 
-	// Prepare initial tasks (step 0: nodes from START, a TASKS channel is empty).
+	// Prepare initial tasks (step 0: nodes from Start, a TASKS channel is empty).
 	tasks, err := prepareNextTasks(ctx, g, config, channels, pendingWrites, prevNodes, step, false)
 	if err != nil {
 		return pregelLoopResult{}, fmt.Errorf("preparing initial tasks: %w", err)
@@ -177,7 +177,18 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 		}
 
 		// --- interrupt-before check ---
-		if matches := interruptTasks(tasks, opts.interruptBefore, channelVersions, versionsSeen); len(matches) > 0 {
+		interruptTasksInput := tasks
+		if hasAllInterrupt(opts.interruptBefore) {
+			visible := make([]pregelTask[State], 0, len(tasks))
+			for _, task := range tasks {
+				if taskHasTag(task, TagHidden) {
+					continue
+				}
+				visible = append(visible, task)
+			}
+			interruptTasksInput = visible
+		}
+		if matches := interruptTasks(interruptTasksInput, opts.interruptBefore, channelVersions, versionsSeen); len(matches) > 0 {
 			beforeWrites := make([]checkpoint.PendingWrite, 0, len(matches))
 			for _, task := range matches {
 				iv := NewInterrupt(
@@ -224,7 +235,18 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 		stepPending := collectSpecialWrites(results)
 
 		// --- interrupt-after check ---
-		if matches := interruptResults(results, opts.interruptAfter, channelVersions, versionsSeen); len(matches) > 0 {
+		interruptResultsInput := results
+		if hasAllInterrupt(opts.interruptAfter) {
+			visible := make([]pregelTaskResult, 0, len(results))
+			for _, result := range results {
+				if containsString(result.tags, TagHidden) {
+					continue
+				}
+				visible = append(visible, result)
+			}
+			interruptResultsInput = visible
+		}
+		if matches := interruptResults(interruptResultsInput, opts.interruptAfter, channelVersions, versionsSeen); len(matches) > 0 {
 			afterWrites := make([]checkpoint.PendingWrite, 0, len(matches))
 			for _, r := range matches {
 				iv := NewInterrupt(
@@ -556,7 +578,7 @@ func awaitTaskResults(ctx context.Context, futures []*taskFuture, results []preg
 func executeCallTask[State any](ctx context.Context, task pregelTask[State], opts executeTasksOptions) pregelTaskResult {
 	call := task.call
 	if call == nil || call.Fn == nil {
-		return pregelTaskResult{taskID: task.id, node: task.name, path: append([]any(nil), task.path...), checkpointNS: task.checkpointNS, err: fmt.Errorf("invalid call task")}
+		return pregelTaskResult{taskID: task.id, node: task.name, path: append([]any(nil), task.path...), checkpointNS: task.checkpointNS, tags: append([]string(nil), task.tags...), err: fmt.Errorf("invalid call task")}
 	}
 	runInput := task.input
 	callTask := task
@@ -605,7 +627,7 @@ type executeTaskOptions[State any] struct {
 func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pregelTask[State], opts executeTaskOptions[State]) pregelTaskResult {
 	inputState, inputErr := coerceStateInput[State](task.input)
 	if inputErr != nil {
-		return pregelTaskResult{taskID: task.id, node: task.name, path: append([]any(nil), task.path...), checkpointNS: task.checkpointNS, err: fmt.Errorf("invalid task input for node '%s': %w", task.name, inputErr)}
+		return pregelTaskResult{taskID: task.id, node: task.name, path: append([]any(nil), task.path...), checkpointNS: task.checkpointNS, tags: append([]string(nil), task.tags...), err: fmt.Errorf("invalid task input for node '%s': %w", task.name, inputErr)}
 	}
 
 	// Build per-task context: task ID + scratchpad (for interrupt) + Send.
@@ -620,6 +642,9 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 	if opts.streamOut != nil {
 		customWriter = func(v any) {
 			mode, data, ns := streamWriterPayload(v, opts.namespace)
+			if mode == StreamModeMessages && taskHasTag(task, TagNoStream) {
+				return
+			}
 			if !opts.streamModes.enabled(mode) {
 				return
 			}
@@ -649,7 +674,7 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 	if len(opts.managed) > 0 {
 		resolved, err := applyManagedValuesToState(inputState, opts.managed, pgScratch)
 		if err != nil {
-			return pregelTaskResult{taskID: task.id, node: task.name, path: append([]any(nil), task.path...), checkpointNS: task.checkpointNS, err: err}
+			return pregelTaskResult{taskID: task.id, node: task.name, path: append([]any(nil), task.path...), checkpointNS: task.checkpointNS, tags: append([]string(nil), task.tags...), err: err}
 		}
 		inputState = resolved
 	}
@@ -739,6 +764,7 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 			Path:         append([]any(nil), task.path...),
 			CheckpointNS: task.checkpointNS,
 			Triggers:     append([]string(nil), task.triggers...),
+			Tags:         append([]string(nil), task.tags...),
 			Input:        inputState,
 			IsPush:       task.isPush,
 			InputSchema:  task.inputSchema,
@@ -774,6 +800,7 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 			node:         task.name,
 			path:         append([]any(nil), task.path...),
 			checkpointNS: task.checkpointNS,
+			tags:         append([]string(nil), task.tags...),
 			writes:       writes,
 			interrupts:   nodeIvs,
 			err:          nil, // not a fatal error
@@ -796,6 +823,7 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 				node:         task.name,
 				path:         append([]any(nil), task.path...),
 				checkpointNS: task.checkpointNS,
+				tags:         append([]string(nil), task.tags...),
 				parentCmd:    pce.cmd,
 			}
 		}
@@ -808,6 +836,7 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 		node:         task.name,
 		path:         append([]any(nil), task.path...),
 		checkpointNS: task.checkpointNS,
+		tags:         append([]string(nil), task.tags...),
 		writes:       writes,
 		err:          execErr,
 	}
@@ -1035,6 +1064,9 @@ func emitTaskStart[State any](out chan<- StreamPart, task pregelTask[State], ste
 	if out == nil {
 		return
 	}
+	if taskHasTag(task, TagHidden) {
+		return
+	}
 	payload := map[string]any{
 		"id":              task.id,
 		"name":            task.name,
@@ -1062,6 +1094,9 @@ func emitTaskFinish(out chan<- StreamPart, r pregelTaskResult, step int, modes s
 	if out == nil {
 		return
 	}
+	if containsString(r.tags, TagHidden) {
+		return
+	}
 	payload := taskResultPayload(r)
 	payload["step"] = step
 	payload["path"] = r.path
@@ -1075,8 +1110,11 @@ func emitTaskFinish(out chan<- StreamPart, r pregelTaskResult, step int, modes s
 	emitDebugEvent(out, modes, namespace, step, "task_result", payload)
 }
 
-func emitUpdate[State, Context, Input, Output any](out chan<- StreamPart, g *StateGraph[State, Context, Input, Output], channels *pregelChannelMap, r pregelTaskResult, step int, modes streamModeSet, namespace []string) {
+func emitUpdate[State, Context, Input, Output any](out chan<- StreamPart, g *StateGraph[State, Context, Input, Output], channels *pregelChannelMap, r pregelTaskResult, _ int, modes streamModeSet, namespace []string) {
 	if out == nil {
+		return
+	}
+	if nodeSpecHasTag(g.nodes[r.node], TagHidden) {
 		return
 	}
 	switch {
@@ -1353,7 +1391,7 @@ func runtimeChannelSchema[State, Context, Input, Output any](g *StateGraph[State
 		schema[name] = channel
 	}
 	for _, we := range g.waitingEdges {
-		if we.Target == END {
+		if we.Target == End {
 			continue
 		}
 		channelName := waitingEdgeChannelName(we)

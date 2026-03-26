@@ -14,8 +14,8 @@ func TestToolsCondition(t *testing.T) {
 	}
 
 	route = prebuilt.ToolsCondition(prebuilt.AgentState{Messages: []prebuilt.Message{{Role: "assistant", Content: "done"}}})
-	if len(route.Nodes) != 1 || route.Nodes[0] != graph.END {
-		t.Fatalf("route = %+v, want END", route)
+	if len(route.Nodes) != 1 || route.Nodes[0] != graph.End {
+		t.Fatalf("route = %+v, want End", route)
 	}
 }
 
