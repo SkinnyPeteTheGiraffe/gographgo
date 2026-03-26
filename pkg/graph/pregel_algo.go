@@ -712,7 +712,7 @@ func stateFromChannels[State any](channels *pregelChannelMap) (State, error) {
 		}
 	}
 
-	// Fall-through: try to read from __input__ a channel for opaque/scalar State.
+	// Fall-through: try to read from the __input__ channel for opaque/scalar State.
 	if ch, ok := channels.channels[pregelInput]; ok {
 		val, err := ch.Get()
 		if err == nil {
