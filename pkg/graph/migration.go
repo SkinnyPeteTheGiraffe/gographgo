@@ -86,14 +86,12 @@ func migrateChannelKey(oldK, newK string, values, versions, seen map[string]any)
 		}
 	}
 
-	if seen != nil {
-		for _, nodeSeen := range seen {
-			if nodeSeenMap, ok := nodeSeen.(map[string]any); ok {
-				if v, exists := nodeSeenMap[oldK]; exists {
-					delete(nodeSeenMap, oldK)
-					if _, exists := nodeSeenMap[newK]; !exists {
-						nodeSeenMap[newK] = v
-					}
+	for _, nodeSeen := range seen {
+		if nodeSeenMap, ok := nodeSeen.(map[string]any); ok {
+			if v, exists := nodeSeenMap[oldK]; exists {
+				delete(nodeSeenMap, oldK)
+				if _, exists := nodeSeenMap[newK]; !exists {
+					nodeSeenMap[newK] = v
 				}
 			}
 		}

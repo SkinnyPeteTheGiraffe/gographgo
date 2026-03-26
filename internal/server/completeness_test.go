@@ -796,23 +796,6 @@ func assertErrorStatus(t *testing.T, url string, wantStatus int) {
 	}
 }
 
-func assertJSONStatus(t *testing.T, method, url, body string, wantStatus int) {
-	t.Helper()
-	req, err := http.NewRequest(method, url, strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("new request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("do request: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != wantStatus {
-		t.Fatalf("status = %d, want %d", resp.StatusCode, wantStatus)
-	}
-}
-
 func assertJSONStatusBody(t *testing.T, method, url, body string, wantStatus int) string {
 	t.Helper()
 	req, err := http.NewRequest(method, url, strings.NewReader(body))

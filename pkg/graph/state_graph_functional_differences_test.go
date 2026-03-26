@@ -13,10 +13,10 @@ func TestStateGraph_ReducerAnnotationTag(t *testing.T) {
 	}
 
 	g := NewStateGraph[State]()
-	g.AddNode("a", func(ctx context.Context, state State) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ State) (NodeResult, error) {
 		return NodeWrites(map[string]Dynamic{"Items": Dyn("first")}), nil
 	})
-	g.AddNode("b", func(ctx context.Context, state State) (NodeResult, error) {
+	g.AddNode("b", func(_ context.Context, _ State) (NodeResult, error) {
 		return NodeWrites(map[string]Dynamic{"Items": Dyn("second")}), nil
 	})
 	g.AddEdge(START, "a")
@@ -43,7 +43,7 @@ func TestStateGraph_AddNodeFuncInfersInputSchema(t *testing.T) {
 	}
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNodeFunc("reader", func(ctx context.Context, in NodeInput) (NodeResult, error) {
+	g.AddNodeFunc("reader", func(_ context.Context, in NodeInput) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"seen": in.Count})), nil
 	})
 	g.AddEdge(START, "reader")
@@ -73,10 +73,10 @@ func TestStateGraph_AddNodeFuncInfersInputSchema(t *testing.T) {
 
 func TestStateGraph_AddNodeFuncDetectsCommandReturn(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNodeFunc("router", func(ctx context.Context, state map[string]any) (Command, error) {
+	g.AddNodeFunc("router", func(_ context.Context, _ map[string]any) (Command, error) {
 		return Command{Goto: RouteTo("next"), Update: map[string]Dynamic{"routed": Dyn(true)}}, nil
 	})
-	g.AddNode("next", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("next", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"done": true})), nil
 	})
 	g.AddEdge(START, "router")
@@ -98,13 +98,13 @@ func TestStateGraph_AddNodeFuncDetectsCommandReturn(t *testing.T) {
 
 func TestStateGraph_CommandDestinationValidation(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("router", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("router", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeCommand(&Command{Goto: RouteTo("other")}), nil
 	})
-	g.AddNode("allowed", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("allowed", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("other", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("other", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(START, "router")
@@ -127,9 +127,9 @@ func TestStateGraph_CommandDestinationValidation(t *testing.T) {
 
 func TestStateGraph_AllEdgesIncludesWaitingEdges(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
-	g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
-	g.AddNode("join", func(ctx context.Context, state map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
+	g.AddNode("join", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
 	g.AddEdge(START, "a")
 	g.AddEdge(START, "b")
 	g.AddEdges([]string{"a", "b"}, "join")
@@ -143,8 +143,8 @@ func TestStateGraph_AllEdgesIncludesWaitingEdges(t *testing.T) {
 func TestStateGraph_AddNodeFuncInjectsRuntimeParameters(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
 	g.AddNodeFunc("n", func(
-		ctx context.Context,
-		state map[string]any,
+		_ context.Context,
+		_ map[string]any,
 		cfg Config,
 		writer StreamWriter,
 		store Store,
@@ -191,7 +191,7 @@ func TestStateGraph_AddNodeFuncInjectsRuntimeParameters(t *testing.T) {
 
 func TestStateGraph_AddNodeFuncInjectsConfigPointer(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNodeFunc("n", func(ctx context.Context, state map[string]any, cfg *Config) (NodeResult, error) {
+	g.AddNodeFunc("n", func(_ context.Context, _ map[string]any, cfg *Config) (NodeResult, error) {
 		if cfg == nil {
 			return NodeWrites(DynMap(map[string]any{"cfg_ptr": false})), nil
 		}
@@ -216,20 +216,20 @@ func TestStateGraph_AddNodeFuncInjectsConfigPointer(t *testing.T) {
 
 func TestStateGraph_AddConditionalEdgesDynamicSupportsStringAndSlicePathMap(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("router", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("router", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("left", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("left", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"branch": "left"})), nil
 	})
-	g.AddNode("right", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("right", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"branch": "right"})), nil
 	})
 	g.AddEdge(START, "router")
 	g.AddEdge("left", END)
 	g.AddEdge("right", END)
 
-	g.AddConditionalEdgesDynamic("router", func(ctx context.Context, state map[string]any) (any, error) {
+	g.AddConditionalEdgesDynamic("router", func(_ context.Context, _ map[string]any) (any, error) {
 		return "left", nil
 	}, []string{"left", "right"})
 

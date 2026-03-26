@@ -216,7 +216,7 @@ func (g GraphInfo) Mermaid() string {
 			continue
 		}
 		if !edge.Resolved || edge.Target == "" || !targetOK {
-			b.WriteString(fmt.Sprintf("    %% unresolved conditional route from %s (%s)\n", sourceID, edge.Branch))
+			_, _ = fmt.Fprintf(&b, "    %% unresolved conditional route from %s (%s)\n", sourceID, edge.Branch)
 			continue
 		}
 
@@ -227,16 +227,16 @@ func (g GraphInfo) Mermaid() string {
 
 		label := strings.TrimSpace(edgeLabel(edge))
 		if label != "" {
-			b.WriteString(fmt.Sprintf("    %s %s|%s| %s\n", sourceID, connector, escapeMermaidLabel(label), targetID))
+			_, _ = fmt.Fprintf(&b, "    %s %s|%s| %s\n", sourceID, connector, escapeMermaidLabel(label), targetID)
 			continue
 		}
-		b.WriteString(fmt.Sprintf("    %s %s %s\n", sourceID, connector, targetID))
+		_, _ = fmt.Fprintf(&b, "    %s %s %s\n", sourceID, connector, targetID)
 	}
 
 	return b.String()
 }
 
-// Schemas returns JSON-schema-compatible views for graph input/output/context.
+// Schemas return JSON-schema-compatible views for graph input/output/context.
 func (g GraphInfo) Schemas() GraphSchemas {
 	return GraphSchemas{
 		Input:   GetInputJSONSchema(g.InputSchema, "Input"),

@@ -115,16 +115,15 @@ func stripTopH1(src string) string {
 }
 
 // stripSection removes everything from the given heading line to the next
-// same-level (##) heading or end of file.
+// same-level (##) heading or end of the file.
 func stripSection(src, heading string) string {
 	idx := strings.Index(src, "\n"+heading)
 	if idx == -1 {
-		// Try at start of file.
-		if strings.HasPrefix(src, heading) {
-			idx = 0
-		} else {
+		// Try at the start of a file.
+		if !strings.HasPrefix(src, heading) {
 			return src
 		}
+		idx = 0
 	} else {
 		idx++ // move past the leading \n
 	}

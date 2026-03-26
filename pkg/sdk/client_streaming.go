@@ -27,7 +27,7 @@ func (c *Client) streamSSE(
 
 		currentMethod := method
 		currentPath := reqPath
-		var currentBody any = in
+		var currentBody = in
 		lastEventID := strings.TrimSpace(headers["Last-Event-ID"])
 		reconnectAttempts := 0
 		const maxReconnectAttempts = 5

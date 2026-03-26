@@ -395,8 +395,8 @@ func (g *CompiledStateGraph[State, Context, Input, Output]) UpdateStateWithConfi
 		}
 	}
 	updatedChannels := make([]string, 0, len(values))
-	for k, v := range values {
-		merged[k] = v
+	merged = mergeState(merged, values)
+	for k := range values {
 		updatedChannels = append(updatedChannels, k)
 	}
 	sort.Strings(updatedChannels)
@@ -460,10 +460,6 @@ func (g *CompiledStateGraph[State, Context, Input, Output]) BulkUpdateState(ctx 
 		}
 	}
 	return &current, nil
-}
-
-func subgraphCheckpointNamespace(parentNS, nodeName, taskID string) string {
-	return subgraphCheckpointNamespaceWithMode(parentNS, nodeName, taskID, SubgraphPersistenceTaskScope)
 }
 
 func subgraphCheckpointNamespaceWithMode(parentNS, nodeName, taskID string, mode SubgraphPersistenceMode) string {

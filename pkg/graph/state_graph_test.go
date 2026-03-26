@@ -11,7 +11,7 @@ func TestStateGraphBasic(t *testing.T) {
 	builder := NewStateGraph[map[string]any]()
 
 	// Add nodes
-	builder.AddNode("increment", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	builder.AddNode("increment", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		count := 0
 		if c, ok := state["count"]; ok {
 			count = c.(int)
@@ -19,7 +19,7 @@ func TestStateGraphBasic(t *testing.T) {
 		return NodeWrites(DynMap(map[string]any{"count": count + 1})), nil
 	})
 
-	builder.AddNode("append_name", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	builder.AddNode("append_name", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		name := ""
 		if n, ok := state["name"]; ok {
 			name = n.(string)
@@ -67,7 +67,7 @@ func TestStateGraphBasic(t *testing.T) {
 func TestStateGraphValidation(t *testing.T) {
 	// Test missing entry point
 	builder := NewStateGraph[map[string]any]()
-	builder.AddNode("node1", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	builder.AddNode("node1", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	builder.AddEdge("node1", END)
@@ -79,7 +79,7 @@ func TestStateGraphValidation(t *testing.T) {
 
 	// Test unknown node in edge
 	builder2 := NewStateGraph[map[string]any]()
-	builder2.AddNode("node1", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	builder2.AddNode("node1", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	builder2.AddEdge(START, "unknown")
@@ -93,7 +93,7 @@ func TestStateGraphValidation(t *testing.T) {
 func TestStateGraphStream(t *testing.T) {
 	builder := NewStateGraph[map[string]any]()
 
-	builder.AddNode("double", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	builder.AddNode("double", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		count := 0
 		if c, ok := state["count"]; ok {
 			count = c.(int)

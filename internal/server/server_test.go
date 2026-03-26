@@ -99,6 +99,60 @@ func TestServer_RunStateHistoryStoreAndEvents(t *testing.T) {
 	}
 }
 
+func TestServer_ThreadStoreRejectsUnsupportedOptions(t *testing.T) {
+	s := server.New(server.Options{})
+	httpSrv := httptest.NewServer(s.Handler())
+	defer httpSrv.Close()
+
+	thread := postJSON[server.Thread](t, httpSrv.URL+"/v1/threads", `{}`, http.StatusCreated)
+
+	putReq, err := http.NewRequest(http.MethodPut, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/profile/name", strings.NewReader(`{"value":{"first":"Ada"},"index":{"fields":["first"]}}`))
+	if err != nil {
+		t.Fatalf("new put request: %v", err)
+	}
+	putReq.Header.Set("Content-Type", "application/json")
+	putResp, err := http.DefaultClient.Do(putReq)
+	if err != nil {
+		t.Fatalf("put request: %v", err)
+	}
+	defer func() { _ = putResp.Body.Close() }()
+	if putResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("put status = %d, want %d", putResp.StatusCode, http.StatusBadRequest)
+	}
+
+	putJSONNoResp(t, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/profile/name", `{"value":{"first":"Ada"}}`, http.StatusOK)
+
+	resp, err := http.Get(httpSrv.URL + "/v1/threads/" + thread.ID + "/store/profile/name?refresh_ttl=true")
+	if err != nil {
+		t.Fatalf("get request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("get status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestServer_ThreadStoreNamespaces(t *testing.T) {
+	s := server.New(server.Options{})
+	httpSrv := httptest.NewServer(s.Handler())
+	defer httpSrv.Close()
+
+	thread := postJSON[server.Thread](t, httpSrv.URL+"/v1/threads", `{}`, http.StatusCreated)
+
+	putJSONNoResp(t, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/profile.user/name", `{"value":{"first":"Ada"}}`, http.StatusOK)
+	putJSONNoResp(t, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/profile.session/token", `{"value":{"token":"abc"}}`, http.StatusOK)
+
+	ns := postJSON[map[string][][]string](t, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/namespaces", `{"prefix":["profile"]}`, http.StatusOK)
+	if len(ns["namespaces"]) != 2 {
+		t.Fatalf("namespaces = %#v, want 2 entries", ns["namespaces"])
+	}
+
+	bad := postJSON[map[string]any](t, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/namespaces", `{"max_depth":1}`, http.StatusBadRequest)
+	if bad["error"] == nil {
+		t.Fatalf("bad response = %#v, want error", bad)
+	}
+}
+
 func postJSON[T any](t *testing.T, url, body string, wantStatus int) T {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))

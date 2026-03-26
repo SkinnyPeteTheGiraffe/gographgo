@@ -303,6 +303,20 @@ func (g *StateGraph[State, Context, Input, Output]) SetContextSchema(schema any)
 	return g
 }
 
+// SetInterruptBefore configures default compile-time interrupt-before nodes.
+// Compile options override these defaults when provided.
+func (g *StateGraph[State, Context, Input, Output]) SetInterruptBefore(nodes ...string) *StateGraph[State, Context, Input, Output] {
+	g.interruptBefore = append([]string(nil), nodes...)
+	return g
+}
+
+// SetInterruptAfter configures default compile-time interrupt-after nodes.
+// Compile options override these defaults when provided.
+func (g *StateGraph[State, Context, Input, Output]) SetInterruptAfter(nodes ...string) *StateGraph[State, Context, Input, Output] {
+	g.interruptAfter = append([]string(nil), nodes...)
+	return g
+}
+
 // InputSchema returns the configured input schema descriptor.
 // If not explicitly configured, it returns the zero value for `Input`.
 func (g *StateGraph[State, Context, Input, Output]) InputSchema() any {
@@ -912,18 +926,18 @@ func wrapNodeFunc[State any](fn any) (Node[State], any, error) {
 	inputType := ft.In(argIndex)
 	for i := argIndex + 1; i < ft.NumIn(); i++ {
 		argType := ft.In(i)
-		switch {
-		case argType == configType:
+		switch argType {
+		case configType:
 			injected = append(injected, injectConfig)
-		case argType == configPtrType:
+		case configPtrType:
 			injected = append(injected, injectConfigPtr)
-		case argType == streamWriterType:
+		case streamWriterType:
 			injected = append(injected, injectWriter)
-		case argType == storeType:
+		case storeType:
 			injected = append(injected, injectStore)
-		case argType == runtimeType:
+		case runtimeType:
 			injected = append(injected, injectRuntime)
-		case argType == runtimePtrType:
+		case runtimePtrType:
 			injected = append(injected, injectRuntimePtr)
 		default:
 			return nil, nil, fmt.Errorf("unsupported injected parameter type %s", argType)
@@ -1166,14 +1180,23 @@ func (g *StateGraph[State, Context, Input, Output]) Compile(options ...CompileOp
 		opts = options[0]
 	}
 
+	interruptBefore := append([]string(nil), g.interruptBefore...)
+	if opts.InterruptBefore != nil {
+		interruptBefore = append([]string(nil), opts.InterruptBefore...)
+	}
+	interruptAfter := append([]string(nil), g.interruptAfter...)
+	if opts.InterruptAfter != nil {
+		interruptAfter = append([]string(nil), opts.InterruptAfter...)
+	}
+
 	if err := g.applyReducerAnnotations(); err != nil {
 		return nil, err
 	}
 
 	// Validate the graph. Build a fresh slice to avoid mutating the options slices.
-	interrupt := make([]string, 0, len(opts.InterruptBefore)+len(opts.InterruptAfter))
-	interrupt = append(interrupt, opts.InterruptBefore...)
-	interrupt = append(interrupt, opts.InterruptAfter...)
+	interrupt := make([]string, 0, len(interruptBefore)+len(interruptAfter))
+	interrupt = append(interrupt, interruptBefore...)
+	interrupt = append(interrupt, interruptAfter...)
 	if err := g.Validate(interrupt); err != nil {
 		return nil, err
 	}
@@ -1189,8 +1212,8 @@ func (g *StateGraph[State, Context, Input, Output]) Compile(options ...CompileOp
 		store:           opts.Store,
 		cache:           opts.Cache,
 		contextValue:    opts.Context,
-		interruptBefore: opts.InterruptBefore,
-		interruptAfter:  opts.InterruptAfter,
+		interruptBefore: interruptBefore,
+		interruptAfter:  interruptAfter,
 		debug:           opts.Debug,
 		name:            name,
 		durability:      opts.Durability,

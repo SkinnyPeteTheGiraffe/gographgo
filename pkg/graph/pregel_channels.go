@@ -65,12 +65,17 @@ func (m *pregelChannelMap) applyBatch(writes []pregelWrite) (map[string]bool, er
 	return changed, nil
 }
 
-// consumeAll calls Consume on every channel and returns true if any changed.
-func (m *pregelChannelMap) consumeAll() bool {
-	changed := false
-	for _, ch := range m.channels {
+// consumeChannels calls Consume on the selected channels and returns the subset
+// whose Consume lifecycle changed state.
+func (m *pregelChannelMap) consumeChannels(keys []string) map[string]bool {
+	changed := make(map[string]bool)
+	for _, key := range keys {
+		ch, ok := m.channels[key]
+		if !ok {
+			continue
+		}
 		if ch.Consume() {
-			changed = true
+			changed[key] = true
 		}
 	}
 	return changed

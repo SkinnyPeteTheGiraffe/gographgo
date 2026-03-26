@@ -13,7 +13,7 @@ func BenchmarkStreamRunEventsParser(b *testing.B) {
 	b.ReportAllocs()
 	const perStreamEvents = 32
 
-	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		for i := 0; i < perStreamEvents; i++ {
 			_, _ = fmt.Fprintf(

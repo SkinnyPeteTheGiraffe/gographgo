@@ -10,7 +10,7 @@ import (
 func TestStateGraph_ManagedValuesInjected(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
 	g.AddManagedValue("remaining", RemainingStepsManager{})
-	g.AddNode("check", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("check", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		_, ok := state["remaining"]
 		return NodeWrites(DynMap(map[string]any{"has_remaining": ok})), nil
 	})
@@ -33,7 +33,7 @@ func TestStateGraph_ManagedValuesInjected(t *testing.T) {
 
 func TestStateGraph_RuntimeContextAndStoreInjected(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("n", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("n", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		rt := GetRuntime(ctx)
 		_, hasCtx := rt.Context.(map[string]any)
 		hasStore := GetStore(ctx) != nil
@@ -59,7 +59,7 @@ func TestStateGraph_RuntimeContextAndStoreInjected(t *testing.T) {
 func TestStateGraph_NodeCachePolicy(t *testing.T) {
 	var calls int32
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("cached", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("cached", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		atomic.AddInt32(&calls, 1)
 		return NodeWrites(DynMap(map[string]any{"ok": true})), nil
 	})
@@ -127,7 +127,7 @@ func TestStateGraph_InputDistinctFromState(t *testing.T) {
 	}
 
 	g := NewStateGraphWithTypes[State, any, Input, State]()
-	g.AddNode("answer", func(ctx context.Context, s State) (NodeResult, error) {
+	g.AddNode("answer", func(_ context.Context, _ State) (NodeResult, error) {
 		return NodeWrites(map[string]Dynamic{
 			"Answer": Dyn("42"),
 			"Step":   Dyn(1),
@@ -174,7 +174,7 @@ func TestStateGraph_OutputDistinctFromState(t *testing.T) {
 	}
 
 	g := NewStateGraphWithTypes[State, any, State, Output]()
-	g.AddNode("set", func(ctx context.Context, s State) (NodeResult, error) {
+	g.AddNode("set", func(_ context.Context, _ State) (NodeResult, error) {
 		return NodeWrites(map[string]Dynamic{
 			"Value":    Dyn("result"),
 			"Internal": Dyn("hidden"),
@@ -219,7 +219,7 @@ func TestStateGraph_InputAndOutputBothDistinctFromState(t *testing.T) {
 	}
 
 	g := NewStateGraphWithTypes[State, any, Input, Output]()
-	g.AddNode("process", func(ctx context.Context, s State) (NodeResult, error) {
+	g.AddNode("process", func(_ context.Context, s State) (NodeResult, error) {
 		return NodeWrites(map[string]Dynamic{
 			"Response": Dyn("processed: " + s.UserQuery),
 			"Tokens":   Dyn(10),
