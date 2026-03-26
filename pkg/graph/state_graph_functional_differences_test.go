@@ -19,9 +19,9 @@ func TestStateGraph_ReducerAnnotationTag(t *testing.T) {
 	g.AddNode("b", func(_ context.Context, _ State) (NodeResult, error) {
 		return NodeWrites(map[string]Dynamic{"Items": Dyn("second")}), nil
 	})
-	g.AddEdge(START, "a")
+	g.AddEdge(Start, "a")
 	g.AddEdge("a", "b")
-	g.AddEdge("b", END)
+	g.AddEdge("b", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -46,8 +46,8 @@ func TestStateGraph_AddNodeFuncInfersInputSchema(t *testing.T) {
 	g.AddNodeFunc("reader", func(_ context.Context, in NodeInput) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"seen": in.Count})), nil
 	})
-	g.AddEdge(START, "reader")
-	g.AddEdge("reader", END)
+	g.AddEdge(Start, "reader")
+	g.AddEdge("reader", End)
 
 	schema, ok := g.NodeInputSchema("reader")
 	if !ok {
@@ -79,8 +79,8 @@ func TestStateGraph_AddNodeFuncDetectsCommandReturn(t *testing.T) {
 	g.AddNode("next", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"done": true})), nil
 	})
-	g.AddEdge(START, "router")
-	g.AddEdge("next", END)
+	g.AddEdge(Start, "router")
+	g.AddEdge("next", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -107,10 +107,10 @@ func TestStateGraph_CommandDestinationValidation(t *testing.T) {
 	g.AddNode("other", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "router")
+	g.AddEdge(Start, "router")
 	g.AddEdge("router", "allowed")
-	g.AddEdge("allowed", END)
-	g.AddEdge("other", END)
+	g.AddEdge("allowed", End)
+	g.AddEdge("other", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -130,8 +130,8 @@ func TestStateGraph_AllEdgesIncludesWaitingEdges(t *testing.T) {
 	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
 	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
 	g.AddNode("join", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
-	g.AddEdge(START, "a")
-	g.AddEdge(START, "b")
+	g.AddEdge(Start, "a")
+	g.AddEdge(Start, "b")
 	g.AddEdges([]string{"a", "b"}, "join")
 
 	all := g.AllEdges()
@@ -157,8 +157,8 @@ func TestStateGraph_AddNodeFuncInjectsRuntimeParameters(t *testing.T) {
 			"has_runtime": runtime != nil && runtime.Context != nil,
 		})), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 
 	compiled, err := g.Compile(CompileOptions{Store: NewInMemoryStore(), Context: map[string]any{"user_id": "u1"}})
 	if err != nil {
@@ -197,8 +197,8 @@ func TestStateGraph_AddNodeFuncInjectsConfigPointer(t *testing.T) {
 		}
 		return NodeWrites(DynMap(map[string]any{"cfg_ptr": cfg.RecursionLimit > 0})), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -225,9 +225,9 @@ func TestStateGraph_AddConditionalEdgesDynamicSupportsStringAndSlicePathMap(t *t
 	g.AddNode("right", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"branch": "right"})), nil
 	})
-	g.AddEdge(START, "router")
-	g.AddEdge("left", END)
-	g.AddEdge("right", END)
+	g.AddEdge(Start, "router")
+	g.AddEdge("left", End)
+	g.AddEdge("right", End)
 
 	g.AddConditionalEdgesDynamic("router", func(_ context.Context, _ map[string]any) (any, error) {
 		return "left", nil

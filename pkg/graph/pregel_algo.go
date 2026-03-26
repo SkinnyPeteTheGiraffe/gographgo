@@ -7,8 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint"
 	"github.com/zeebo/xxh3"
+
+	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint"
 )
 
 // prepareNextTasks determines which tasks (nodes) should run in the next
@@ -22,7 +23,7 @@ import (
 //     Branch functions returning Send objects also produce PUSH tasks.
 //
 //  2. PULL tasks — triggered by graph edges. For step == 0 these are entry
-//     nodes reachable from START; for later steps they are nodes reachable
+//     nodes reachable from Start; for later steps they are nodes reachable
 //     from the previous step's completed nodes via direct edges or conditional
 //     branches that return string node names.
 //
@@ -50,7 +51,7 @@ func prepareNextTasks[State, Context, Input, Output any](
 				for idx, item := range sends {
 					switch packet := item.Value().(type) {
 					case Send:
-						if packet.Node == "" || packet.Node == END {
+						if packet.Node == "" || packet.Node == End {
 							continue
 						}
 						path := []any{"push", idx}
@@ -112,7 +113,7 @@ func prepareNextTasks[State, Context, Input, Output any](
 		for _, nodeName := range prevNodes {
 			// Direct edges.
 			for _, edge := range g.edges {
-				if edge.Source == nodeName && edge.Target != END && !seen[edge.Target] {
+				if edge.Source == nodeName && edge.Target != End && !seen[edge.Target] {
 					pullCandidates = append(pullCandidates, edge.Target)
 					seen[edge.Target] = true
 				}
@@ -147,12 +148,21 @@ func prepareNextTasks[State, Context, Input, Output any](
 		}
 
 		for _, we := range g.waitingEdges {
-			if we.Target == END {
+			if we.Target == End {
 				continue
 			}
 			joinChannel := waitingEdgeChannelName(we)
 			join, ok := channels.channels[joinChannel]
-			if !ok || !join.IsAvailable() || seen[we.Target] {
+			if seen[we.Target] {
+				continue
+			}
+			if ok {
+				if !join.IsAvailable() {
+					continue
+				}
+			} else if !allSourcesCompleted(g, we.Sources, prevNodes) {
+				// Fallback for cases where waiting-edge channels are unavailable
+				// (for example, partial/manual channel maps in tests or tooling).
 				continue
 			}
 			pullCandidates = append(pullCandidates, we.Target)
@@ -162,7 +172,7 @@ func prepareNextTasks[State, Context, Input, Output any](
 
 	// PUSH tasks from branch-returned Send objects.
 	for _, s := range branchSends {
-		if s.Node != "" && s.Node != END {
+		if s.Node != "" && s.Node != End {
 			path := []any{"push", "branch", s.Node, len(tasks)}
 			task := pregelTask[State]{
 				name:     s.Node,
@@ -225,6 +235,7 @@ func setTaskNodeMetadata[State, Context, Input, Output any](g *StateGraph[State,
 	task.inputSchema = node.InputSchema
 	task.writers = append([]ChannelWrite[State](nil), node.Writers...)
 	task.subgraphs = append([]string(nil), node.Subgraphs...)
+	task.tags = append([]string(nil), nodeTags(node)...)
 }
 
 func pregelTaskID(config Config, step int, path []any, name string, triggers []string) string {
@@ -239,7 +250,7 @@ func pregelTaskID(config Config, step int, path []any, name string, triggers []s
 
 // allSourcesCompleted checks if all sources in a waiting edge have completed
 // in the current superstep (i.e., are in prevNodes).
-func allSourcesCompleted[State, Context, Input, Output any](g *StateGraph[State, Context, Input, Output], sources []string, prevNodes []string) bool {
+func allSourcesCompleted[State, Context, Input, Output any](_ *StateGraph[State, Context, Input, Output], sources []string, prevNodes []string) bool {
 	prevSet := make(map[string]bool, len(prevNodes))
 	for _, n := range prevNodes {
 		prevSet[n] = true
@@ -252,12 +263,12 @@ func allSourcesCompleted[State, Context, Input, Output any](g *StateGraph[State,
 	return true
 }
 
-// entryNodes returns the node names reachable directly from START.
+// entryNodes returns the node names reachable directly from Start.
 func entryNodes[State, Context, Input, Output any](g *StateGraph[State, Context, Input, Output]) []string {
 	var nodes []string
 	seen := make(map[string]bool)
 	for _, edge := range g.edges {
-		if edge.Source == START && edge.Target != END && !seen[edge.Target] {
+		if edge.Source == Start && edge.Target != End && !seen[edge.Target] {
 			nodes = append(nodes, edge.Target)
 			seen[edge.Target] = true
 		}
@@ -339,7 +350,7 @@ func routingTargetsBoth(route Route, pathMap map[string]string) ([]string, []Sen
 
 	sends := make([]Send, 0, len(route.Sends))
 	for _, s := range route.Sends {
-		if s.Node == "" || s.Node == END {
+		if s.Node == "" || s.Node == End {
 			continue
 		}
 		sends = append(sends, s)
@@ -353,14 +364,14 @@ func routingTargetsBoth(route Route, pathMap map[string]string) ([]string, []Sen
 func routingTargets(route Route, pathMap map[string]string) []string {
 	strs := make([]string, 0, len(route.Nodes))
 	for _, node := range route.Nodes {
-		if node == "" || node == END {
+		if node == "" || node == End {
 			continue
 		}
 		target := node
 		if mapped, ok := pathMap[node]; ok {
 			target = mapped
 		}
-		if target == "" || target == END {
+		if target == "" || target == End {
 			continue
 		}
 		strs = append(strs, target)
@@ -370,14 +381,14 @@ func routingTargets(route Route, pathMap map[string]string) []string {
 
 // applyTaskWrites applies superstep writes with channel lifecycle behavior:
 //
-//  1. consume channels that were read by this step's tasks,
-//  2. apply explicit writes for known channels,
-//  3. apply empty updates to available channels not written in this step.
+//  1. Consume channels that were read by this step's tasks.
+//  2. Apply explicit writes for known channels.
+//  3. Apply empty updates to available channels not written in this step.
 //
 // Unknown channel writes are ignored.
 //
 // Returns:
-//   - interrupts with task-generated interrupt records appended,
+//   - Interrupts with task-generated interrupt records appended,
 //   - versionBumped channels whose lifecycle changed this step,
 //   - updatedChannels that are still available after updates.
 func applyTaskWrites[State, Context, Input, Output any](
@@ -420,7 +431,7 @@ func applyTaskWrites[State, Context, Input, Output any](
 	waitingBySource := make(map[string][]WaitingEdge)
 	if g != nil {
 		for _, we := range g.waitingEdges {
-			if we.Target == END {
+			if we.Target == End {
 				continue
 			}
 			for _, src := range we.Sources {
@@ -456,7 +467,7 @@ func applyTaskWrites[State, Context, Input, Output any](
 		for _, write := range result.writes {
 			switch write.channel {
 			case pregelInterrupt:
-				if iv, ok := write.value.(Interrupt); ok {
+				if iv, ok := write.value.(Interrupt); ok && !containsString(result.tags, TagHidden) {
 					interrupts = append(interrupts, iv)
 				}
 				continue
@@ -701,7 +712,7 @@ func stateFromChannels[State any](channels *pregelChannelMap) (State, error) {
 		}
 	}
 
-	// Fall-through: try to read from __input__ channel for opaque/scalar State.
+	// Fall-through: try to read from __input__ a channel for opaque/scalar State.
 	if ch, ok := channels.channels[pregelInput]; ok {
 		val, err := ch.Get()
 		if err == nil {

@@ -2,7 +2,7 @@
 //
 // This example models a simple review pipeline:
 //
-//	START → review → approve OR reject → notify → END
+//	Start → review → approve OR reject → notify → End
 //
 // The "review" node sets a Score. A conditional edge then routes to
 // "approve" or "reject" based on that score. Both paths converge at
@@ -59,10 +59,10 @@ func main() {
 	})
 
 	// Wire static edges.
-	builder.AddEdge(graph.START, "review")
+	builder.AddEdge(graph.Start, "review")
 	builder.AddEdge("approve", "notify")
 	builder.AddEdge("reject", "notify")
-	builder.AddEdge("notify", graph.END)
+	builder.AddEdge("notify", graph.End)
 
 	// Conditional edge: after "review", route based on score.
 	builder.AddConditionalEdges("review",

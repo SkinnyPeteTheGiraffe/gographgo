@@ -14,8 +14,8 @@ func TestStateGraph_ManagedValuesInjected(t *testing.T) {
 		_, ok := state["remaining"]
 		return NodeWrites(DynMap(map[string]any{"has_remaining": ok})), nil
 	})
-	g.AddEdge(START, "check")
-	g.AddEdge("check", END)
+	g.AddEdge(Start, "check")
+	g.AddEdge("check", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -39,8 +39,8 @@ func TestStateGraph_RuntimeContextAndStoreInjected(t *testing.T) {
 		hasStore := GetStore(ctx) != nil
 		return NodeWrites(DynMap(map[string]any{"ctx": hasCtx, "store": hasStore})), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 
 	compiled, err := g.Compile(CompileOptions{Store: NewInMemoryStore(), Context: map[string]any{"user_id": "u1"}})
 	if err != nil {
@@ -71,8 +71,8 @@ func TestStateGraph_NodeCachePolicy(t *testing.T) {
 			return "x=" + DefaultCacheKey(m["x"])
 		},
 	})
-	g.AddEdge(START, "cached")
-	g.AddEdge("cached", END)
+	g.AddEdge(Start, "cached")
+	g.AddEdge("cached", End)
 
 	compiled, err := g.Compile(CompileOptions{Cache: NewInMemoryCache()})
 	if err != nil {
@@ -133,8 +133,8 @@ func TestStateGraph_InputDistinctFromState(t *testing.T) {
 			"Step":   Dyn(1),
 		}), nil
 	})
-	g.AddEdge(START, "answer")
-	g.AddEdge("answer", END)
+	g.AddEdge(Start, "answer")
+	g.AddEdge("answer", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -180,8 +180,8 @@ func TestStateGraph_OutputDistinctFromState(t *testing.T) {
 			"Internal": Dyn("hidden"),
 		}), nil
 	})
-	g.AddEdge(START, "set")
-	g.AddEdge("set", END)
+	g.AddEdge(Start, "set")
+	g.AddEdge("set", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -225,8 +225,8 @@ func TestStateGraph_InputAndOutputBothDistinctFromState(t *testing.T) {
 			"Tokens":   Dyn(10),
 		}), nil
 	})
-	g.AddEdge(START, "process")
-	g.AddEdge("process", END)
+	g.AddEdge(Start, "process")
+	g.AddEdge("process", End)
 
 	compiled, err := g.Compile()
 	if err != nil {

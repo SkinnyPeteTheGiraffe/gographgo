@@ -11,10 +11,10 @@ import (
 type GraphNodeKind string
 
 const (
-	// GraphNodeStart is the synthetic START node.
+	// GraphNodeStart is the synthetic Start node.
 	GraphNodeStart GraphNodeKind = "start"
 
-	// GraphNodeEnd is the synthetic END node.
+	// GraphNodeEnd is the synthetic End node.
 	GraphNodeEnd GraphNodeKind = "end"
 
 	// GraphNodeRegular is a user-defined graph node.
@@ -97,7 +97,7 @@ type GraphInfo struct {
 	// Name is the compiled graph name.
 	Name string `json:"name"`
 
-	// Nodes lists graph nodes, including synthetic START and END nodes.
+	// Nodes lists graph nodes, including synthetic Start and End nodes.
 	Nodes []GraphNodeInfo `json:"nodes"`
 
 	// Edges lists graph edges across direct, conditional, and waiting topology.
@@ -274,7 +274,7 @@ func (g GraphInfo) Subgraphs() []GraphSubgraphInfo {
 
 func graphNodesFromBuilder[State, Context, Input, Output any](b *StateGraph[State, Context, Input, Output]) []GraphNodeInfo {
 	names := make([]string, 0, len(b.nodes)+2)
-	names = append(names, START, END)
+	names = append(names, Start, End)
 	for name := range b.nodes {
 		names = append(names, name)
 	}
@@ -283,11 +283,11 @@ func graphNodesFromBuilder[State, Context, Input, Output any](b *StateGraph[Stat
 	nodes := make([]GraphNodeInfo, 0, len(names))
 	for _, name := range names {
 		switch name {
-		case START:
-			nodes = append(nodes, GraphNodeInfo{Name: START, Kind: GraphNodeStart})
+		case Start:
+			nodes = append(nodes, GraphNodeInfo{Name: Start, Kind: GraphNodeStart})
 			continue
-		case END:
-			nodes = append(nodes, GraphNodeInfo{Name: END, Kind: GraphNodeEnd})
+		case End:
+			nodes = append(nodes, GraphNodeInfo{Name: End, Kind: GraphNodeEnd})
 			continue
 		}
 

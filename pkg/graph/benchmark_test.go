@@ -17,9 +17,9 @@ func BenchmarkPregelInvoke(b *testing.B) {
 		count, _ := state["count"].(int)
 		return graph.NodeWrites(graph.DynMap(map[string]any{"count": count * 2})), nil
 	})
-	builder.AddEdge(graph.START, "start")
+	builder.AddEdge(graph.Start, "start")
 	builder.AddEdge("start", "double")
-	builder.AddEdge("double", graph.END)
+	builder.AddEdge("double", graph.End)
 
 	compiled, err := builder.Compile()
 	if err != nil {

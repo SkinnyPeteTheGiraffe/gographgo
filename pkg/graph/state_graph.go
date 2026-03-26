@@ -7,8 +7,8 @@
 //
 //	builder := graph.NewStateGraph[MyState]()
 //	builder.AddNode("node_a", nodeAFunc)
-//	builder.AddEdge(graph.START, "node_a")
-//	builder.AddEdge("node_a", graph.END)
+//	builder.AddEdge(graph.Start, "node_a")
+//	builder.AddEdge("node_a", graph.End)
 //	compiled := builder.Compile()
 //	result := compiled.Invoke(ctx, initialState)
 package graph
@@ -81,8 +81,8 @@ type StateGraph[State, Context, Input, Output any] struct {
 }
 
 var reservedGraphIdentifiers = map[string]struct{}{
-	START:           {},
-	END:             {},
+	Start:           {},
+	End:             {},
 	pregelInput:     {},
 	pregelInterrupt: {},
 	pregelResume:    {},
@@ -363,19 +363,19 @@ func (g *StateGraph[State, Context, Input, Output]) GetContextJSONSchema() map[s
 }
 
 // AddEdge adds a directed edge from start to end.
-// Use START for the entry point and END for termination.
+// Use Start for the entry point and End for termination.
 func (g *StateGraph[State, Context, Input, Output]) AddEdge(start, end string) *StateGraph[State, Context, Input, Output] {
-	if start == END {
-		panic("END cannot be a start node")
+	if start == End {
+		panic("End cannot be a start node")
 	}
 
-	if end == START {
-		panic("START cannot be an end node")
+	if end == Start {
+		panic("Start cannot be an end node")
 	}
 
 	g.edges = append(g.edges, Edge{Source: start, Target: end})
 
-	if start != START {
+	if start != Start {
 		if node, ok := g.nodes[start]; ok {
 			node.Destinations = append(node.Destinations, end)
 		}
@@ -409,7 +409,7 @@ func (g *StateGraph[State, Context, Input, Output]) AddConditionalEdges(
 
 	g.branches[source] = append(g.branches[source], branch)
 
-	if source != START {
+	if source != Start {
 		if node, ok := g.nodes[source]; ok {
 			for _, dest := range pathMap {
 				node.Destinations = append(node.Destinations, dest)
@@ -485,13 +485,13 @@ func (g *StateGraph[State, Context, Input, Output]) AddSequence(
 // SetEntryPoint sets the starting node for the graph.
 func (g *StateGraph[State, Context, Input, Output]) SetEntryPoint(name string) *StateGraph[State, Context, Input, Output] {
 	g.entryPoint = name
-	return g.AddEdge(START, name)
+	return g.AddEdge(Start, name)
 }
 
 // SetFinishPoint marks a node as a terminal node.
 func (g *StateGraph[State, Context, Input, Output]) SetFinishPoint(name string) *StateGraph[State, Context, Input, Output] {
 	g.finishPoints = append(g.finishPoints, name)
-	return g.AddEdge(name, END)
+	return g.AddEdge(name, End)
 }
 
 // SetConditionalEntryPoint sets a conditional entry point.
@@ -499,7 +499,7 @@ func (g *StateGraph[State, Context, Input, Output]) SetConditionalEntryPoint(
 	path func(ctx context.Context, state State) (Route, error),
 	pathMap map[string]string,
 ) *StateGraph[State, Context, Input, Output] {
-	return g.AddConditionalEdges(START, path, pathMap)
+	return g.AddConditionalEdges(Start, path, pathMap)
 }
 
 // SetConditionalEntryPointDynamic sets a conditional entry point using the same
@@ -508,7 +508,7 @@ func (g *StateGraph[State, Context, Input, Output]) SetConditionalEntryPointDyna
 	path func(ctx context.Context, state State) (any, error),
 	pathMap any,
 ) *StateGraph[State, Context, Input, Output] {
-	return g.AddConditionalEdgesDynamic(START, path, pathMap)
+	return g.AddConditionalEdgesDynamic(Start, path, pathMap)
 }
 
 // AddEdges adds directed edges from multiple source nodes to a single target.
@@ -516,8 +516,8 @@ func (g *StateGraph[State, Context, Input, Output]) SetConditionalEntryPointDyna
 // before executing. All sources must complete their current superstep before
 // the target can proceed.
 func (g *StateGraph[State, Context, Input, Output]) AddEdges(sources []string, target string) *StateGraph[State, Context, Input, Output] {
-	if target == START {
-		panic("START cannot be a target node")
+	if target == Start {
+		panic("Start cannot be a target node")
 	}
 
 	if len(sources) == 0 {
@@ -525,11 +525,11 @@ func (g *StateGraph[State, Context, Input, Output]) AddEdges(sources []string, t
 	}
 
 	for _, source := range sources {
-		if source == END {
-			panic("END cannot be a source node")
+		if source == End {
+			panic("End cannot be a source node")
 		}
 
-		if source != START {
+		if source != Start {
 			if node, ok := g.nodes[source]; ok {
 				node.Destinations = append(node.Destinations, target)
 			}
@@ -586,14 +586,14 @@ func (g *StateGraph[State, Context, Input, Output]) Validate(interrupt []string)
 	}
 
 	for source := range allSources {
-		if source != START && g.nodes[source] == nil {
+		if source != Start && g.nodes[source] == nil {
 			return fmt.Errorf("found edge starting at unknown node '%s'", source)
 		}
 	}
 
 	// Check that graph has entry point
-	if !allSources[START] {
-		return fmt.Errorf("graph must have an entry point: add at least one edge from START")
+	if !allSources[Start] {
+		return fmt.Errorf("graph must have an entry point: add at least one edge from Start")
 	}
 
 	// Check that all targets exist
@@ -608,7 +608,7 @@ func (g *StateGraph[State, Context, Input, Output]) Validate(interrupt []string)
 	}
 
 	for target := range allTargets {
-		if target != END && g.nodes[target] == nil {
+		if target != End && g.nodes[target] == nil {
 			return fmt.Errorf("found edge ending at unknown node '%s'", target)
 		}
 	}
@@ -646,7 +646,7 @@ func (g *StateGraph[State, Context, Input, Output]) validateBranchEnds() error {
 			}
 			// Check each route key in the pathMap
 			for routeKey, dest := range branch.PathMap {
-				if dest == END {
+				if dest == End {
 					continue
 				}
 				// Check if destination is a known node
@@ -668,7 +668,7 @@ func (g *StateGraph[State, Context, Input, Output]) validateBranchEnds() error {
 				}
 			}
 			for _, dest := range branch.Ends {
-				if dest == END {
+				if dest == End {
 					continue
 				}
 				if _, ok := g.nodes[dest]; !ok {
@@ -721,11 +721,11 @@ func (g *StateGraph[State, Context, Input, Output]) validateBranchSpecs() error 
 func (g *StateGraph[State, Context, Input, Output]) validateDeclaredDestinations() error {
 	for nodeName, node := range g.nodes {
 		for _, dest := range node.Destinations {
-			if dest == END {
+			if dest == End {
 				continue
 			}
-			if dest == START {
-				return fmt.Errorf("node '%s' destination cannot target START", nodeName)
+			if dest == Start {
+				return fmt.Errorf("node '%s' destination cannot target Start", nodeName)
 			}
 			if _, ok := g.nodes[dest]; !ok {
 				return fmt.Errorf("node '%s' declares unknown destination '%s'", nodeName, dest)

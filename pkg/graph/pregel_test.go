@@ -244,9 +244,9 @@ func TestPregelLoop_SimpleLinearGraph(t *testing.T) {
 	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"y": 2})), nil
 	})
-	g.AddEdge(START, "a")
+	g.AddEdge(Start, "a")
 	g.AddEdge("a", "b")
-	g.AddEdge("b", END)
+	g.AddEdge("b", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -276,8 +276,8 @@ func TestPregelLoop_StatePassedToNodes(t *testing.T) {
 		v, _ := state["value"].(int)
 		return NodeWrites(DynMap(map[string]any{"value": v * 2})), nil
 	})
-	g.AddEdge(START, "double")
-	g.AddEdge("double", END)
+	g.AddEdge(Start, "double")
+	g.AddEdge("double", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -307,7 +307,7 @@ func TestPregelLoop_ConditionalBranching(t *testing.T) {
 		return NodeWrites(DynMap(map[string]any{"path": "right"})), nil
 	})
 
-	g.AddEdge(START, "router")
+	g.AddEdge(Start, "router")
 	g.AddConditionalEdges("router",
 		func(_ context.Context, state map[string]any) (Route, error) {
 			if state["go"] == "left" {
@@ -317,8 +317,8 @@ func TestPregelLoop_ConditionalBranching(t *testing.T) {
 		},
 		nil, // no pathMap — result is node name directly
 	)
-	g.AddEdge("left", END)
-	g.AddEdge("right", END)
+	g.AddEdge("left", End)
+	g.AddEdge("right", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -351,7 +351,7 @@ func TestPregelLoop_RecursionLimitEnforced(t *testing.T) {
 	g.AddNode("loop", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "loop")
+	g.AddEdge(Start, "loop")
 	g.AddEdge("loop", "loop") // infinite loop
 
 	compiled, err := g.Compile()
@@ -377,8 +377,8 @@ func TestPregelLoop_NodeError(t *testing.T) {
 	g.AddNode("boom", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), sentinel
 	})
-	g.AddEdge(START, "boom")
-	g.AddEdge("boom", END)
+	g.AddEdge(Start, "boom")
+	g.AddEdge("boom", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -399,8 +399,8 @@ func TestPregelLoop_StreamUpdatesMode(t *testing.T) {
 	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"k": "v"})), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -445,8 +445,8 @@ func TestPregelLoop_RetryOnNodeFailure(t *testing.T) {
 			},
 		},
 	}
-	g.AddEdge(START, "flaky")
-	g.AddEdge("flaky", END)
+	g.AddEdge(Start, "flaky")
+	g.AddEdge("flaky", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -483,9 +483,9 @@ func TestPregelLoop_BinaryOperatorChannel(t *testing.T) {
 	g.AddNode("append_world", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"messages": "world"})), nil
 	})
-	g.AddEdge(START, "append_hello")
+	g.AddEdge(Start, "append_hello")
 	g.AddEdge("append_hello", "append_world")
-	g.AddEdge("append_world", END)
+	g.AddEdge("append_world", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -517,9 +517,9 @@ func TestPregelLoop_AnyValueClearsOnIdleStep(t *testing.T) {
 	g.AddNode("idle", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "writer")
+	g.AddEdge(Start, "writer")
 	g.AddEdge("writer", "idle")
-	g.AddEdge("idle", END)
+	g.AddEdge("idle", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -546,9 +546,9 @@ func TestPregelLoop_EphemeralValueClearsOnIdleStep(t *testing.T) {
 	g.AddNode("idle", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "writer")
+	g.AddEdge(Start, "writer")
 	g.AddEdge("writer", "idle")
-	g.AddEdge("idle", END)
+	g.AddEdge("idle", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -575,9 +575,9 @@ func TestPregelLoop_TopicAccumulatePersistsAcrossIdleStep(t *testing.T) {
 	g.AddNode("idle", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "writer")
+	g.AddEdge(Start, "writer")
 	g.AddEdge("writer", "idle")
-	g.AddEdge("idle", END)
+	g.AddEdge("idle", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -609,9 +609,9 @@ func TestPregelLoop_TopicNonAccumulateClearsOnIdleStep(t *testing.T) {
 	g.AddNode("idle", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "writer")
+	g.AddEdge(Start, "writer")
 	g.AddEdge("writer", "idle")
-	g.AddEdge("idle", END)
+	g.AddEdge("idle", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -641,8 +641,8 @@ func TestPregelLoop_IgnoresUnknownChannelWritesForTypedState(t *testing.T) {
 	g.AddNode("writer", func(_ context.Context, _ typedState) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"Known": 1, "Unknown": 2})), nil
 	})
-	g.AddEdge(START, "writer")
-	g.AddEdge("writer", END)
+	g.AddEdge(Start, "writer")
+	g.AddEdge("writer", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -694,11 +694,11 @@ func TestPregelLoop_SendFanoutNotReplayedOnLaterSteps(t *testing.T) {
 		return NoNodeResult(), nil
 	})
 
-	g.AddEdge(START, "sender")
+	g.AddEdge(Start, "sender")
 	g.AddEdge("sender", "step1")
 	g.AddEdge("step1", "step2")
-	g.AddEdge("step2", END)
-	g.AddEdge("worker", END)
+	g.AddEdge("step2", End)
+	g.AddEdge("worker", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -728,9 +728,9 @@ func TestPregelLoop_ContextCancelled(t *testing.T) {
 		t.Error("node 'never' should not have been executed")
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "slow")
+	g.AddEdge(Start, "slow")
 	g.AddEdge("slow", "never")
-	g.AddEdge("never", END)
+	g.AddEdge("never", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -756,10 +756,10 @@ func TestPregelLoop_StepTimeoutEnforced(t *testing.T) {
 	g.AddNode("fast", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"fast": true})), nil
 	})
-	g.AddEdge(START, "slow")
-	g.AddEdge(START, "fast")
-	g.AddEdge("slow", END)
-	g.AddEdge("fast", END)
+	g.AddEdge(Start, "slow")
+	g.AddEdge(Start, "fast")
+	g.AddEdge("slow", End)
+	g.AddEdge("fast", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -798,8 +798,8 @@ func TestPregelLoop_StepTimeoutSavesCheckpointOnFailure(t *testing.T) {
 			return NodeWrites(DynMap(map[string]any{"slow": true})), nil
 		}
 	})
-	g.AddEdge(START, "slow")
-	g.AddEdge("slow", END)
+	g.AddEdge(Start, "slow")
+	g.AddEdge("slow", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver, Durability: DurabilitySync})
 	if err != nil {
@@ -855,7 +855,7 @@ func TestPregelLoop_MaxConcurrencyLimitsFanoutAndKeepsWriteOrder(t *testing.T) {
 		idx, _ := state["idx"].(int)
 		return NodeWrites(DynMap(map[string]any{"events": idx})), nil
 	})
-	g.AddEdge(START, "dispatch")
+	g.AddEdge(Start, "dispatch")
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -957,7 +957,7 @@ func TestApplyTaskWrites_OrdersWritesByTaskPath(t *testing.T) {
 
 func TestRoutingTargets_AppliesPathMapAndFiltersInvalid(t *testing.T) {
 	route := Route{
-		Nodes: []string{"raw", "mapped", "", END},
+		Nodes: []string{"raw", "mapped", "", End},
 	}
 	pathMap := map[string]string{
 		"mapped": "dest",
@@ -971,11 +971,11 @@ func TestRoutingTargets_AppliesPathMapAndFiltersInvalid(t *testing.T) {
 
 func TestRoutingTargetsBoth_SplitsNodeTargetsAndSends(t *testing.T) {
 	route := Route{
-		Nodes: []string{"left", END},
+		Nodes: []string{"left", End},
 		Sends: []Send{
 			{Node: "worker", Arg: Dyn("ok")},
 			{Node: "", Arg: Dyn("skip")},
-			{Node: END, Arg: Dyn("skip")},
+			{Node: End, Arg: Dyn("skip")},
 		},
 	}
 
@@ -1071,6 +1071,46 @@ func TestApplyTaskWrites_ConsumesOnlyTriggeredChannels(t *testing.T) {
 	}
 }
 
+func TestPrepareNextTasks_WaitingEdgeFallsBackToPrevNodesWhenJoinChannelMissing(t *testing.T) {
+	g := NewStateGraph[map[string]any]()
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
+	g.AddNode("join", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
+	g.AddEdge(Start, "a")
+	g.AddEdge(Start, "b")
+	g.AddEdges([]string{"a", "b"}, "join")
+	g.AddEdge("join", End)
+
+	channels := newPregelChannelMap(map[string]Channel{})
+	tasks, err := prepareNextTasks(context.Background(), g, Config{}, channels, nil, []string{"a", "b"}, 1, false)
+	if err != nil {
+		t.Fatalf("prepareNextTasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].name != "join" {
+		t.Fatalf("tasks = %#v, want one join task", tasks)
+	}
+}
+
+func TestPrepareNextTasks_WaitingEdgeFallbackRequiresAllSources(t *testing.T) {
+	g := NewStateGraph[map[string]any]()
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
+	g.AddNode("join", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
+	g.AddEdge(Start, "a")
+	g.AddEdge(Start, "b")
+	g.AddEdges([]string{"a", "b"}, "join")
+	g.AddEdge("join", End)
+
+	channels := newPregelChannelMap(map[string]Channel{})
+	tasks, err := prepareNextTasks(context.Background(), g, Config{}, channels, nil, []string{"a"}, 1, false)
+	if err != nil {
+		t.Fatalf("prepareNextTasks: %v", err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("tasks = %#v, want no tasks", tasks)
+	}
+}
+
 func TestPregelLoop_CompileDefaultStepTimeoutApplied(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
 	g.AddNode("slow", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
@@ -1081,8 +1121,8 @@ func TestPregelLoop_CompileDefaultStepTimeoutApplied(t *testing.T) {
 			return NodeWrites(DynMap(map[string]any{"ok": true})), nil
 		}
 	})
-	g.AddEdge(START, "slow")
-	g.AddEdge("slow", END)
+	g.AddEdge(Start, "slow")
+	g.AddEdge("slow", End)
 
 	compiled, err := g.Compile(CompileOptions{StepTimeout: 20 * time.Millisecond})
 	if err != nil {
@@ -1128,7 +1168,7 @@ func TestPregelLoop_CompileDefaultMaxConcurrencyApplied(t *testing.T) {
 		}
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "dispatch")
+	g.AddEdge(Start, "dispatch")
 
 	compiled, err := g.Compile(CompileOptions{MaxConcurrency: 4})
 	if err != nil {
@@ -1156,9 +1196,9 @@ func TestPregelLoop_SendFanout(t *testing.T) {
 		// PUSH task: state is Send.Arg, so state["msg"] == "ping"
 		return NodeWrites(DynMap(map[string]any{"received": state["msg"]})), nil
 	})
-	g.AddEdge(START, "sender")
+	g.AddEdge(Start, "sender")
 	// No edge "sender" → "receiver": receiver is reached only via Send fan-out.
-	g.AddEdge("receiver", END)
+	g.AddEdge("receiver", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1183,9 +1223,9 @@ func TestPregelLoop_InterruptBefore(t *testing.T) {
 	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"ran": "b"})), nil
 	})
-	g.AddEdge(START, "a")
+	g.AddEdge(Start, "a")
 	g.AddEdge("a", "b")
-	g.AddEdge("b", END)
+	g.AddEdge("b", End)
 
 	compiled, err := g.Compile(CompileOptions{InterruptBefore: []string{"b"}})
 	if err != nil {
@@ -1212,8 +1252,8 @@ func TestPregelLoop_StreamValuesMode(t *testing.T) {
 	g.AddNode("step1", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"step": 1})), nil
 	})
-	g.AddEdge(START, "step1")
-	g.AddEdge("step1", END)
+	g.AddEdge(Start, "step1")
+	g.AddEdge("step1", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1243,8 +1283,8 @@ func TestPregelLoop_StreamMessagesMode(t *testing.T) {
 		StreamMessage(ctx, "lo", map[string]any{"index": 1})
 		return NodeWrites(DynMap(map[string]any{"done": true})), nil
 	})
-	g.AddEdge(START, "llm")
-	g.AddEdge("llm", END)
+	g.AddEdge(Start, "llm")
+	g.AddEdge("llm", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1275,14 +1315,97 @@ func TestPregelLoop_StreamMessagesMode(t *testing.T) {
 	}
 }
 
+func TestPregelLoop_TagNoStreamSuppressesMessages(t *testing.T) {
+	g := NewStateGraph[map[string]any]()
+	g.AddNode("llm", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
+		StreamMessage(ctx, "hidden-token", nil)
+		return NodeWrites(DynMap(map[string]any{"done": true})), nil
+	})
+	g.nodes["llm"].Metadata = map[string]any{"tags": []string{TagNoStream}}
+	g.AddEdge(Start, "llm")
+	g.AddEdge("llm", End)
+
+	compiled, err := g.Compile()
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	stream := compiled.Stream(context.Background(), map[string]any{}, StreamModeDebug)
+	messageCount := 0
+	updateCount := 0
+	for part := range stream {
+		if part.Err != nil {
+			t.Fatalf("stream error: %v", part.Err)
+		}
+		if part.Type == StreamModeMessages {
+			messageCount++
+		}
+		if part.Type == StreamModeUpdates {
+			updateCount++
+		}
+	}
+	if messageCount != 0 {
+		t.Fatalf("messageCount = %d, want 0", messageCount)
+	}
+	if updateCount == 0 {
+		t.Fatal("expected updates stream to include write")
+	}
+}
+
+func TestPregelLoop_TagHiddenSuppressesTaskAndUpdateStreams(t *testing.T) {
+	g := NewStateGraph[map[string]any]()
+	g.AddNode("hidden", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		return NodeWrites(DynMap(map[string]any{"x": 1})), nil
+	})
+	g.nodes["hidden"].Metadata = map[string]any{"tags": []string{TagHidden}}
+	g.AddEdge(Start, "hidden")
+	g.AddEdge("hidden", End)
+
+	compiled, err := g.Compile()
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	stream := compiled.Stream(context.Background(), map[string]any{}, StreamModeTasks)
+	for part := range stream {
+		if part.Err != nil {
+			t.Fatalf("stream error: %v", part.Err)
+		}
+		t.Fatalf("unexpected stream part for hidden node: %#v", part)
+	}
+}
+
+func TestPregelLoop_TagHiddenSkippedForInterruptAll(t *testing.T) {
+	g := NewStateGraph[map[string]any]()
+	g.AddNode("hidden", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		return NodeWrites(DynMap(map[string]any{"ran": true})), nil
+	})
+	g.nodes["hidden"].Metadata = map[string]any{"tags": []string{TagHidden}}
+	g.AddEdge(Start, "hidden")
+	g.AddEdge("hidden", End)
+
+	compiled, err := g.Compile(CompileOptions{InterruptBefore: []string{All}})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	out, err := compiled.Invoke(context.Background(), map[string]any{})
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	state := out.Value.(map[string]any)
+	if state["ran"] != true {
+		t.Fatalf("state = %#v, want hidden node to run", state)
+	}
+}
+
 func TestPregelLoop_StreamCheckpointsModeIncludesNamespace(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 	g := NewStateGraph[map[string]any]()
 	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"k": "v"})), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -1329,8 +1452,8 @@ func TestPregelLoop_StreamTasksIncludesTaskResultEnvelope(t *testing.T) {
 	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"k": "v"})), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1371,8 +1494,8 @@ func TestPregelLoop_StreamDebugWrapsTaskAndCheckpointEvents(t *testing.T) {
 	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"k": "v"})), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -1421,8 +1544,8 @@ func TestPregelLoop_StreamDuplexCombinesModes(t *testing.T) {
 	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"k": "v"})), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1456,9 +1579,9 @@ func TestPregelLoop_StreamDuplexCombinesModes(t *testing.T) {
 }
 
 func TestPregelLoop_EmptyGraphErrors(t *testing.T) {
-	// A graph with START → END but no nodes won't panic — it just produces no tasks.
+	// A graph with Start → End but no nodes won't panic — it just produces no tasks.
 	g := NewStateGraph[map[string]any]()
-	g.AddEdge(START, END)
+	g.AddEdge(Start, End)
 
 	_, err := g.Compile()
 	if err != nil {
@@ -1495,11 +1618,11 @@ func TestPregelLoop_MultipleNodesPerSuperstep(t *testing.T) {
 		return NodeWrites(DynMap(map[string]any{"b2": true})), nil
 	})
 
-	g.AddEdge(START, "a")
+	g.AddEdge(Start, "a")
 	g.AddEdge("a", "b1")
 	g.AddEdge("a", "b2")
-	g.AddEdge("b1", END)
-	g.AddEdge("b2", END)
+	g.AddEdge("b1", End)
+	g.AddEdge("b2", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1545,11 +1668,11 @@ func TestPregelLoop_WaitingEdgeActsAsPersistentJoinBarrier(t *testing.T) {
 	g.AddNode("join", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"joined": true})), nil
 	})
-	g.AddEdge(START, "a")
+	g.AddEdge(Start, "a")
 	g.AddEdge("a", "mid")
 	g.AddEdge("mid", "b")
 	g.AddEdges([]string{"a", "b"}, "join")
-	g.AddEdge("join", END)
+	g.AddEdge("join", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1585,10 +1708,10 @@ func TestPregelLoop_DeferredWaitingJoinRunsAfterFinish(t *testing.T) {
 		return NodeWrites(DynMap(map[string]any{"deferred_join": true})), nil
 	})
 	g.nodes["join"].Defer = true
-	g.AddEdge(START, "a")
-	g.AddEdge(START, "b")
+	g.AddEdge(Start, "a")
+	g.AddEdge(Start, "b")
 	g.AddEdges([]string{"a", "b"}, "join")
-	g.AddEdge("join", END)
+	g.AddEdge("join", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1624,12 +1747,12 @@ func TestPregelLoop_BranchReturnedSend(t *testing.T) {
 	g.AddNode("worker", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"result": state["payload"]})), nil
 	})
-	g.AddEdge(START, "router")
+	g.AddEdge(Start, "router")
 	g.AddConditionalEdges("router",
 		func(_ context.Context, _ map[string]any) (Route, error) {
 			return RouteWithSends(Send{Node: "worker", Arg: Dyn(map[string]any{"payload": "hello"})}), nil
 		}, nil)
-	g.AddEdge("worker", END)
+	g.AddEdge("worker", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1668,8 +1791,8 @@ func TestPregelLoop_MultipleSendFanout(t *testing.T) {
 	g.AddNode("worker", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"items": state["n"]})), nil
 	})
-	g.AddEdge(START, "dispatcher")
-	g.AddEdge("worker", END)
+	g.AddEdge(Start, "dispatcher")
+	g.AddEdge("worker", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1697,8 +1820,8 @@ func TestPregelLoop_CommandGotoSend(t *testing.T) {
 	g.AddNode("handler", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"answer": state["value"]})), nil
 	})
-	g.AddEdge(START, "gate")
-	g.AddEdge("handler", END)
+	g.AddEdge(Start, "gate")
+	g.AddEdge("handler", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1728,8 +1851,8 @@ func TestPregelLoop_SendPayloadCoercesToTypedState(t *testing.T) {
 	g.AddNode("receiver", func(_ context.Context, state S) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"Value": state.Value})), nil
 	})
-	g.AddEdge(START, "sender")
-	g.AddEdge("receiver", END)
+	g.AddEdge(Start, "sender")
+	g.AddEdge("receiver", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1759,8 +1882,8 @@ func TestPregelLoop_SendPayloadTypeMismatchErrors(t *testing.T) {
 	g.AddNode("receiver", func(_ context.Context, _ S) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "sender")
-	g.AddEdge("receiver", END)
+	g.AddEdge(Start, "sender")
+	g.AddEdge("receiver", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1792,7 +1915,7 @@ func TestPregelLoop_FunctionalCallFanout(t *testing.T) {
 		})
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "dispatch")
+	g.AddEdge(Start, "dispatch")
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1830,9 +1953,9 @@ func TestPregelLoop_ParallelExecution(t *testing.T) {
 			return NodeWrites(DynMap(map[string]any{"counter": 1})), nil
 		})
 		g.AddEdge("start", name)
-		g.AddEdge(name, END)
+		g.AddEdge(name, End)
 	}
-	g.AddEdge(START, "start")
+	g.AddEdge(Start, "start")
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1863,8 +1986,8 @@ func TestStructState_ReflectionIO(t *testing.T) {
 	g.AddNode("incr", func(_ context.Context, state MyState) (NodeResult, error) {
 		return NodeState(Dyn(MyState{Name: state.Name + "!", Count: state.Count + 1})), nil
 	})
-	g.AddEdge(START, "incr")
-	g.AddEdge("incr", END)
+	g.AddEdge(Start, "incr")
+	g.AddEdge("incr", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1901,9 +2024,9 @@ func TestMessagesStateGraph_AddMessages(t *testing.T) {
 			"Messages": []Message{{ID: "2", Role: "assistant", Content: "hello"}},
 		})), nil
 	})
-	g.AddEdge(START, "node1")
+	g.AddEdge(Start, "node1")
 	g.AddEdge("node1", "node2")
-	g.AddEdge("node2", END)
+	g.AddEdge("node2", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -1934,8 +2057,8 @@ func TestNodeInterrupt_HaltsNode(t *testing.T) {
 		// Should not reach here.
 		return NodeWrites(DynMap(map[string]any{"reached": true})), nil
 	})
-	g.AddEdge(START, "ask")
-	g.AddEdge("ask", END)
+	g.AddEdge(Start, "ask")
+	g.AddEdge("ask", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2227,8 +2350,8 @@ func TestPregelLoop_StreamErrorTerminates(t *testing.T) {
 	g.AddNode("err_node", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), fmt.Errorf("intentional error")
 	})
-	g.AddEdge(START, "err_node")
-	g.AddEdge("err_node", END)
+	g.AddEdge(Start, "err_node")
+	g.AddEdge("err_node", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2255,8 +2378,8 @@ func TestPregelLoop_PersistsErrorChannelWriteOnFailure(t *testing.T) {
 	g.AddNode("err_node", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), fmt.Errorf("intentional error")
 	})
-	g.AddEdge(START, "err_node")
-	g.AddEdge("err_node", END)
+	g.AddEdge(Start, "err_node")
+	g.AddEdge("err_node", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -2316,10 +2439,10 @@ func TestPregelLoop_TaskFailureCancelsSiblingTasks(t *testing.T) {
 			return NodeWrites(DynMap(map[string]any{"slow": true})), nil
 		}
 	})
-	g.AddEdge(START, "fail")
-	g.AddEdge(START, "slow")
-	g.AddEdge("fail", END)
-	g.AddEdge("slow", END)
+	g.AddEdge(Start, "fail")
+	g.AddEdge(Start, "slow")
+	g.AddEdge("fail", End)
+	g.AddEdge("slow", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2343,11 +2466,11 @@ func TestPregelLoop_BranchRoutePathMap(t *testing.T) {
 	g.AddNode("left", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"path": "left"})), nil
 	})
-	g.AddEdge(START, "router")
+	g.AddEdge(Start, "router")
 	g.AddConditionalEdges("router", func(_ context.Context, _ map[string]any) (Route, error) {
 		return RouteTo("L"), nil
 	}, map[string]string{"L": "left"})
-	g.AddEdge("left", END)
+	g.AddEdge("left", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2369,8 +2492,8 @@ func TestPregelLoop_UnsupportedNodeOutputTypeErrors(t *testing.T) {
 	g.AddNode("bad", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeState(Dyn(123)), nil
 	})
-	g.AddEdge(START, "bad")
-	g.AddEdge("bad", END)
+	g.AddEdge(Start, "bad")
+	g.AddEdge("bad", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2389,8 +2512,8 @@ func TestPregelLoop_CheckpointTracksVersionsSeen(t *testing.T) {
 	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"x": 1})), nil
 	})
-	g.AddEdge(START, "a")
-	g.AddEdge("a", END)
+	g.AddEdge(Start, "a")
+	g.AddEdge("a", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2434,8 +2557,8 @@ func TestPregelTaskStructure_DeterministicTaskIDs(t *testing.T) {
 	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"x": 1})), nil
 	})
-	g.AddEdge(START, "a")
-	g.AddEdge("a", END)
+	g.AddEdge(Start, "a")
+	g.AddEdge("a", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2465,10 +2588,10 @@ func TestPregelTaskStructure_WaitingJoinUsesJoinTriggerForID(t *testing.T) {
 	g.AddNode("join", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"joined": true})), nil
 	})
-	g.AddEdge(START, "a")
-	g.AddEdge(START, "b")
+	g.AddEdge(Start, "a")
+	g.AddEdge(Start, "b")
 	g.AddEdges([]string{"a", "b"}, "join")
-	g.AddEdge("join", END)
+	g.AddEdge("join", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2520,8 +2643,8 @@ func TestPregelTaskStructure_TracksTaskPathForPushAndPull(t *testing.T) {
 	g.AddNode("receiver", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"seen": state["msg"]})), nil
 	})
-	g.AddEdge(START, "sender")
-	g.AddEdge("receiver", END)
+	g.AddEdge(Start, "sender")
+	g.AddEdge("receiver", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2560,8 +2683,8 @@ func TestPregelTaskStructure_AppliesNodeWriters(t *testing.T) {
 		result.Writes["writer_applied"] = Dyn(true)
 		return result, nil
 	})
-	g.AddEdge(START, "a")
-	g.AddEdge("a", END)
+	g.AddEdge(Start, "a")
+	g.AddEdge("a", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2585,8 +2708,8 @@ func TestPregelLoop_ResumeMapByInterruptID(t *testing.T) {
 		answer := NodeInterrupt(ctx, Dyn("what is your name?"))
 		return NodeWrites(DynMap(map[string]any{"answer": answer.Value()})), nil
 	})
-	g.AddEdge(START, "ask")
-	g.AddEdge("ask", END)
+	g.AddEdge(Start, "ask")
+	g.AddEdge("ask", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -2607,7 +2730,7 @@ func TestPregelLoop_ResumeMapByInterruptID(t *testing.T) {
 		ThreadID:     "resume-map-by-id",
 		Checkpointer: saver,
 		Metadata: map[string]any{
-			CONFIG_KEY_RESUME_MAP: map[string]any{interruptID: "Alice"},
+			ConfigKeyResumeMap: map[string]any{interruptID: "Alice"},
 		},
 	}
 	second, err := compiled.Invoke(WithConfig(context.Background(), secondCfg), map[string]any{})
@@ -2638,8 +2761,8 @@ func TestPregelLoop_ResumeRequiresMapWhenMultiplePendingInterrupts(t *testing.T)
 		NodeInterrupt(ctx, Dyn("b?"))
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "a")
-	g.AddEdge(START, "b")
+	g.AddEdge(Start, "a")
+	g.AddEdge(Start, "b")
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -2659,14 +2782,14 @@ func TestPregelLoop_ResumeRequiresMapWhenMultiplePendingInterrupts(t *testing.T)
 		ThreadID:     "resume-multi",
 		Checkpointer: saver,
 		Metadata: map[string]any{
-			CONFIG_KEY_RESUME: "single-value",
+			ConfigKeyResume: "single-value",
 		},
 	}
 	_, err = compiled.Invoke(WithConfig(context.Background(), secondCfg), map[string]any{})
 	if err == nil {
 		t.Fatal("expected error when resuming multiple interrupts without resume_map")
 	}
-	if !strings.Contains(err.Error(), CONFIG_KEY_RESUME_MAP) {
+	if !strings.Contains(err.Error(), ConfigKeyResumeMap) {
 		t.Fatalf("expected resume_map guidance error, got %v", err)
 	}
 }
@@ -2680,9 +2803,9 @@ func TestPregelLoop_InterruptBeforeUsesVersionChecksOnResume(t *testing.T) {
 	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"done": true})), nil
 	})
-	g.AddEdge(START, "a")
+	g.AddEdge(Start, "a")
 	g.AddEdge("a", "b")
-	g.AddEdge("b", END)
+	g.AddEdge("b", End)
 
 	compiled, err := g.Compile(CompileOptions{Checkpointer: saver, InterruptBefore: []string{"b"}})
 	if err != nil {
@@ -2703,7 +2826,7 @@ func TestPregelLoop_InterruptBeforeUsesVersionChecksOnResume(t *testing.T) {
 		ThreadID:     "interrupt-version-check",
 		Checkpointer: saver,
 		Metadata: map[string]any{
-			CONFIG_KEY_RESUME_MAP: map[string]any{resumeID: "continue"},
+			ConfigKeyResumeMap: map[string]any{resumeID: "continue"},
 		},
 	}
 	second, err := compiled.Invoke(WithConfig(context.Background(), secondCfg), map[string]any{})
@@ -2733,8 +2856,8 @@ func TestPregelTaskStructure_EmitsTaskCacheKeyInputSchemaAndSubgraphs(t *testing
 	})
 	g.SetNodeCachePolicy("typed", &CachePolicy{KeyFunc: func(_ any) string { return "cache-key" }})
 	g.SetNodeSubgraphs("typed", "math_subgraph", "io_subgraph")
-	g.AddEdge(START, "typed")
-	g.AddEdge("typed", END)
+	g.AddEdge(Start, "typed")
+	g.AddEdge("typed", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2772,8 +2895,8 @@ func TestPregelTaskStructure_EmitsTaskCheckpointNamespaceMetadata(t *testing.T) 
 	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"done": true})), nil
 	})
-	g.AddEdge(START, "n")
-	g.AddEdge("n", END)
+	g.AddEdge(Start, "n")
+	g.AddEdge("n", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -2860,8 +2983,8 @@ func TestSubgraph_ParentCommandUpdatesPropagateToParent(t *testing.T) {
 			Update: map[string]Dynamic{"parent_key": Dyn("from_subgraph")},
 		}), nil
 	})
-	sub.AddEdge(START, "sub_node")
-	sub.AddEdge("sub_node", END)
+	sub.AddEdge(Start, "sub_node")
+	sub.AddEdge("sub_node", End)
 	compiledSub, err := sub.Compile()
 	if err != nil {
 		t.Fatalf("compile subgraph: %v", err)
@@ -2873,9 +2996,9 @@ func TestSubgraph_ParentCommandUpdatesPropagateToParent(t *testing.T) {
 	parent.AddNode("after", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"after_ran": true})), nil
 	})
-	parent.AddEdge(START, "subgraph_node")
+	parent.AddEdge(Start, "subgraph_node")
 	parent.AddEdge("subgraph_node", "after")
-	parent.AddEdge("after", END)
+	parent.AddEdge("after", End)
 	compiledParent, err := parent.Compile()
 	if err != nil {
 		t.Fatalf("compile parent: %v", err)
@@ -2905,8 +3028,8 @@ func TestSubgraph_ParentCommandGotoRoutesParent(t *testing.T) {
 			Goto:  RouteTo("routed_node"),
 		}), nil
 	})
-	sub.AddEdge(START, "sub_node")
-	sub.AddEdge("sub_node", END)
+	sub.AddEdge(Start, "sub_node")
+	sub.AddEdge("sub_node", End)
 	compiledSub, err := sub.Compile()
 	if err != nil {
 		t.Fatalf("compile subgraph: %v", err)
@@ -2923,9 +3046,9 @@ func TestSubgraph_ParentCommandGotoRoutesParent(t *testing.T) {
 		t.Error("unreachable node should not run")
 		return NodeResult{}, nil
 	})
-	parent.AddEdge(START, "subgraph_node")
+	parent.AddEdge(Start, "subgraph_node")
 	// subgraph_node has no direct outgoing edge — routing comes from the parent command.
-	parent.AddEdge("routed_node", END)
+	parent.AddEdge("routed_node", End)
 	compiledParent, err := parent.Compile()
 	if err != nil {
 		t.Fatalf("compile parent: %v", err)
@@ -2956,8 +3079,8 @@ func TestSubgraph_ParentCommandWithUpdateAndGoto(t *testing.T) {
 			Goto:   RouteTo("landing"),
 		}), nil
 	})
-	sub.AddEdge(START, "sub_node")
-	sub.AddEdge("sub_node", END)
+	sub.AddEdge(Start, "sub_node")
+	sub.AddEdge("sub_node", End)
 	compiledSub, err := sub.Compile()
 	if err != nil {
 		t.Fatalf("compile subgraph: %v", err)
@@ -2968,8 +3091,8 @@ func TestSubgraph_ParentCommandWithUpdateAndGoto(t *testing.T) {
 	parent.AddNode("landing", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"landed": true})), nil
 	})
-	parent.AddEdge(START, "sub")
-	parent.AddEdge("landing", END)
+	parent.AddEdge(Start, "sub")
+	parent.AddEdge("landing", End)
 	compiledParent, err := parent.Compile()
 	if err != nil {
 		t.Fatalf("compile parent: %v", err)
@@ -2999,8 +3122,8 @@ func TestRootGraph_ParentCommandErrors(t *testing.T) {
 			Update: map[string]Dynamic{"k": Dyn(1)},
 		}), nil
 	})
-	g.AddEdge(START, "node")
-	g.AddEdge("node", END)
+	g.AddEdge(Start, "node")
+	g.AddEdge("node", End)
 	compiled, err := g.Compile()
 	if err != nil {
 		t.Fatalf("compile: %v", err)

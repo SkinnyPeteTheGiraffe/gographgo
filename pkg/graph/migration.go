@@ -105,7 +105,7 @@ func migrateNodeToBranch(values, versions, seen map[string]any) {
 
 	nodeKeys := make([]string, 0, len(versions))
 	for k := range versions {
-		if !strings.HasPrefix(k, "branch:") && !strings.HasPrefix(k, "start:") && k != START && k != END {
+		if !strings.HasPrefix(k, "branch:") && !strings.HasPrefix(k, "start:") && k != Start && k != End {
 			nodeKeys = append(nodeKeys, k)
 		}
 	}

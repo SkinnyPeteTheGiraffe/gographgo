@@ -55,13 +55,13 @@ func commandResult(cmd *Command) (writes []pregelWrite, sendTargets []Send, resu
 
 	// Extract Goto routing targets.
 	for _, n := range cmd.Goto.Nodes {
-		if n == "" || n == END {
+		if n == "" || n == End {
 			continue
 		}
 		sendTargets = append(sendTargets, Send{Node: n, Arg: Dyn(unwrapCommandUpdate(cmd.Update))})
 	}
 	for _, s := range cmd.Goto.Sends {
-		if s.Node == "" || s.Node == END {
+		if s.Node == "" || s.Node == End {
 			continue
 		}
 		sendTargets = append(sendTargets, s)

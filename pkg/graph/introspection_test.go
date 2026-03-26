@@ -8,25 +8,25 @@ import (
 
 func TestCompiledStateGraphGetGraph(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("router", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("router", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("left", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("left", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("right", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("right", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("join", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("join", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 
-	g.AddEdge(START, "router")
-	g.AddConditionalEdges("router", func(ctx context.Context, state map[string]any) (Route, error) {
+	g.AddEdge(Start, "router")
+	g.AddConditionalEdges("router", func(_ context.Context, state map[string]any) (Route, error) {
 		return Route{}, nil
 	}, map[string]string{"l": "left", "r": "right"})
 	g.AddEdges([]string{"left", "right"}, "join")
-	g.AddEdge("join", END)
+	g.AddEdge("join", End)
 
 	g.SetNodeSubgraphs("router", "decision")
 	g.SetNodeRetryPolicy("router", RetryPolicy{MaxAttempts: 2})
@@ -70,8 +70,8 @@ func TestCompiledStateGraphGetGraph(t *testing.T) {
 		t.Fatalf("interrupt before = %#v, want [router]", info.InterruptBefore)
 	}
 
-	if !hasEdge(info.Edges, GraphEdgeInfo{Source: START, Target: "router", Kind: GraphEdgeDirect, Resolved: true}) {
-		t.Fatalf("missing direct edge START->router in %#v", info.Edges)
+	if !hasEdge(info.Edges, GraphEdgeInfo{Source: Start, Target: "router", Kind: GraphEdgeDirect, Resolved: true}) {
+		t.Fatalf("missing direct edge Start->router in %#v", info.Edges)
 	}
 	if !hasEdge(info.Edges, GraphEdgeInfo{Source: "router", Target: "left", Kind: GraphEdgeConditional, Label: "l", Resolved: true}) {
 		t.Fatalf("missing conditional edge router->left in %#v", info.Edges)
@@ -83,17 +83,17 @@ func TestCompiledStateGraphGetGraph(t *testing.T) {
 
 func TestGraphInfoMermaid(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "a")
-	g.AddConditionalEdges("a", func(ctx context.Context, state map[string]any) (Route, error) {
+	g.AddEdge(Start, "a")
+	g.AddConditionalEdges("a", func(_ context.Context, state map[string]any) (Route, error) {
 		return Route{}, nil
 	}, map[string]string{"go": "b"})
-	g.AddEdge("b", END)
+	g.AddEdge("b", End)
 
 	compiled, err := g.Compile()
 	if err != nil {
@@ -104,7 +104,7 @@ func TestGraphInfoMermaid(t *testing.T) {
 	if !strings.Contains(mermaid, "flowchart TD") {
 		t.Fatalf("mermaid output missing flowchart header: %s", mermaid)
 	}
-	if !strings.Contains(mermaid, START) || !strings.Contains(mermaid, END) {
+	if !strings.Contains(mermaid, Start) || !strings.Contains(mermaid, End) {
 		t.Fatalf("mermaid output missing boundary nodes: %s", mermaid)
 	}
 	if !strings.Contains(mermaid, "-.->|go|") {
@@ -126,11 +126,11 @@ func TestGraphInfoSchemasAndSubgraphs(t *testing.T) {
 	g.SetContextSchema(struct {
 		Tenant string `json:"tenant"`
 	}{})
-	g.AddNode("router", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("router", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddEdge(START, "router")
-	g.AddEdge("router", END)
+	g.AddEdge(Start, "router")
+	g.AddEdge("router", End)
 	g.SetNodeSubgraphs("router", "decision")
 
 	compiled, err := g.Compile(CompileOptions{Name: "SchemaGraph"})

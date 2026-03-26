@@ -2,7 +2,7 @@
 //
 // This example builds a linear pipeline:
 //
-//	START → greet → shout → END
+//	Start → greet → shout → End
 //
 // State is a typed Go struct. Each node reads the current state and returns
 // channel writes that are merged back into the state before the next node runs.
@@ -43,10 +43,10 @@ func main() {
 		}), nil
 	})
 
-	// 3. Wire up edges: START → greet → shout → END.
-	builder.AddEdge(graph.START, "greet")
+	// 3. Wire up edges: Start → greet → shout → End.
+	builder.AddEdge(graph.Start, "greet")
 	builder.AddEdge("greet", "shout")
-	builder.AddEdge("shout", graph.END)
+	builder.AddEdge("shout", graph.End)
 
 	// 4. Compile validates the graph topology and returns an executable graph.
 	compiled, err := builder.Compile()

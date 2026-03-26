@@ -8,12 +8,12 @@ import (
 
 func TestNewMessageGraph_EquivalentToManualMessagesGraph(t *testing.T) {
 	buildFlow := func(g *StateGraph[MessagesState, any, MessagesState, MessagesState]) {
-		g.AddNode("append", func(ctx context.Context, state MessagesState) (NodeResult, error) {
+		g.AddNode("append", func(_ context.Context, state MessagesState) (NodeResult, error) {
 			return NodeWrites(DynMap(map[string]any{
 				"Messages": []Message{{ID: "1", Role: "assistant", Content: "hello"}},
 			})), nil
 		})
-		g.AddNode("update", func(ctx context.Context, state MessagesState) (NodeResult, error) {
+		g.AddNode("update", func(_ context.Context, _ MessagesState) (NodeResult, error) {
 			return NodeWrites(DynMap(map[string]any{
 				"Messages": []Message{
 					{ID: "1", Role: "assistant", Content: "hello again"},
@@ -21,9 +21,9 @@ func TestNewMessageGraph_EquivalentToManualMessagesGraph(t *testing.T) {
 				},
 			})), nil
 		})
-		g.AddEdge(START, "append")
+		g.AddEdge(Start, "append")
 		g.AddEdge("append", "update")
-		g.AddEdge("update", END)
+		g.AddEdge("update", End)
 	}
 
 	manual := NewStateGraph[MessagesState]()

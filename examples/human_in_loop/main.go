@@ -2,7 +2,7 @@
 //
 // Execution flow:
 //
-//	START → ask_user → process → END
+//	Start → ask_user → process → End
 //
 // The "ask_user" node calls NodeInterrupt, which halts execution and surfaces
 // a question to the caller. The graph resumes when Invoke is called again on
@@ -54,9 +54,9 @@ func main() {
 		}), nil
 	})
 
-	builder.AddEdge(graph.START, "ask_user")
+	builder.AddEdge(graph.Start, "ask_user")
 	builder.AddEdge("ask_user", "process")
-	builder.AddEdge("process", graph.END)
+	builder.AddEdge("process", graph.End)
 
 	compiled, err := builder.Compile(graph.CompileOptions{Checkpointer: saver})
 	if err != nil {
@@ -91,7 +91,7 @@ func main() {
 		ThreadID:     cfg.ThreadID,
 		Checkpointer: saver,
 		Metadata: map[string]any{
-			graph.CONFIG_KEY_RESUME: "Go",
+			graph.ConfigKeyResume: "Go",
 		},
 	})
 

@@ -9,10 +9,10 @@ import (
 )
 
 func TestTask_Composition(t *testing.T) {
-	addOne := NewTask("add_one", func(ctx context.Context, input int) (int, error) {
+	addOne := NewTask("add_one", func(_ context.Context, input int) (int, error) {
 		return input + 1, nil
 	})
-	double := NewTask("double", func(ctx context.Context, input int) (int, error) {
+	double := NewTask("double", func(_ context.Context, input int) (int, error) {
 		return input * 2, nil
 	})
 
@@ -30,7 +30,7 @@ func TestTask_Composition(t *testing.T) {
 }
 
 func TestTask_AsyncRunsInParallel(t *testing.T) {
-	slow := NewTask("slow", func(ctx context.Context, input int) (int, error) {
+	slow := NewTask("slow", func(_ context.Context, input int) (int, error) {
 		time.Sleep(80 * time.Millisecond)
 		return input * 2, nil
 	})
@@ -57,10 +57,10 @@ func TestTask_AsyncRunsInParallel(t *testing.T) {
 }
 
 func TestEntrypoint_InvokeSuccess(t *testing.T) {
-	addOne := NewTask("add_one", func(ctx context.Context, input int) (int, error) {
+	addOne := NewTask("add_one", func(_ context.Context, input int) (int, error) {
 		return input + 1, nil
 	})
-	double := NewTask("double", func(ctx context.Context, input int) (int, error) {
+	double := NewTask("double", func(_ context.Context, input int) (int, error) {
 		return input * 2, nil
 	})
 
@@ -134,7 +134,7 @@ func TestEntrypoint_ReturnWithSavePersistsAndLoadsPrevious(t *testing.T) {
 }
 
 func TestEntrypoint_StreamEmitsTaskAndFinalValue(t *testing.T) {
-	addOne := NewTask("add_one", func(ctx context.Context, input int) (int, error) {
+	addOne := NewTask("add_one", func(_ context.Context, input int) (int, error) {
 		return input + 1, nil
 	})
 	workflow := NewEntrypoint("streaming", func(ctx context.Context, input int) (EntrypointResult[int], error) {

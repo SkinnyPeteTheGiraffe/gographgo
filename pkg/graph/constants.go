@@ -6,26 +6,26 @@ package graph
 
 // Constants for graph execution.
 const (
-	// START is the first (virtual) node in a graph.
+	// Start is the first (virtual) node in a graph.
 	// All graph executions begin at this node.
-	START = "__start__"
+	Start = "__start__"
 
-	// END is the last (virtual) node in a graph.
+	// End is the last (virtual) node in a graph.
 	// Graph execution terminates when reaching this node.
-	END = "__end__"
+	End = "__end__"
 
-	// TAG_HIDDEN is used to hide nodes/edges from certain
+	// TagHidden is used to hide nodes/edges from certain
 	// tracing and streaming environments.
-	TAG_HIDDEN = "langsmith:hidden"
+	TagHidden = "gographgo:hidden"
 
-	// TAG_NOSTREAM disables streaming for chat models.
-	TAG_NOSTREAM = "nostream"
+	// TagNoStream disables streaming for chat models.
+	TagNoStream = "nostream"
 
-	// CONFIG_KEY_RESUME stores a single resume value (or ordered resume values)
+	// ConfigKeyResume stores a single resume value (or ordered resume values)
 	// in Config.Metadata for interrupt resume.
-	CONFIG_KEY_RESUME = "resume"
+	ConfigKeyResume = "resume"
 
-	// CONFIG_KEY_RESUME_MAP stores interrupt-id keyed resume values in
-	// Config.Metadata. This matches LangGraph's CONFIG_KEY_RESUME_MAP behavior.
-	CONFIG_KEY_RESUME_MAP = "resume_map"
+	// ConfigKeyResumeMap stores interrupt-id keyed resume values in
+	// Config.Metadata. This matches LangGraph's ConfigKeyResumeMap behavior.
+	ConfigKeyResumeMap = "resume_map"
 )
