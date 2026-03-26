@@ -1,6 +1,6 @@
 # gographgo
 
-**LangGraph, but it's Go. And it rips.**
+**Almost like LangGraph, but it's Go.**
 
 gographgo is a faithful Go port of [LangGraph](https://github.com/langchain-ai/langgraph) — a framework for building stateful, graph-based workflows and AI agents. It gives you the full power of directed-graph execution (nodes, edges, conditional routing, fan-out, fan-in, interrupt/resume) with Go's type system, goroutines, and performance characteristics doing the heavy lifting.
 
