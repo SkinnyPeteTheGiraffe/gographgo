@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -67,7 +68,7 @@ func TestExecuteWithRetry_StopsWhenRetryOnReturnsFalse(t *testing.T) {
 		InitialInterval: time.Millisecond,
 		BackoffFactor:   1,
 		MaxInterval:     time.Second,
-		RetryOn:         func(err error) bool { return false }, // never retry
+		RetryOn:         func(_ error) bool { return false }, // never retry
 	}, func() error {
 		calls++
 		return permanent
@@ -237,10 +238,10 @@ func TestDefaultRetryOn_SelectivelyRejectsDeterministicErrors(t *testing.T) {
 
 func TestPregelLoop_SimpleLinearGraph(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"x": 1})), nil
 	})
-	g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"y": 2})), nil
 	})
 	g.AddEdge(START, "a")
@@ -271,7 +272,7 @@ func TestPregelLoop_SimpleLinearGraph(t *testing.T) {
 
 func TestPregelLoop_StatePassedToNodes(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("double", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("double", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		v, _ := state["value"].(int)
 		return NodeWrites(DynMap(map[string]any{"value": v * 2})), nil
 	})
@@ -296,19 +297,19 @@ func TestPregelLoop_StatePassedToNodes(t *testing.T) {
 
 func TestPregelLoop_ConditionalBranching(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("router", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("router", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("left", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("left", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"path": "left"})), nil
 	})
-	g.AddNode("right", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("right", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"path": "right"})), nil
 	})
 
 	g.AddEdge(START, "router")
 	g.AddConditionalEdges("router",
-		func(ctx context.Context, state map[string]any) (Route, error) {
+		func(_ context.Context, state map[string]any) (Route, error) {
 			if state["go"] == "left" {
 				return RouteTo("left"), nil
 			}
@@ -347,7 +348,7 @@ func TestPregelLoop_ConditionalBranching(t *testing.T) {
 
 func TestPregelLoop_RecursionLimitEnforced(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("loop", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("loop", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(START, "loop")
@@ -373,7 +374,7 @@ func TestPregelLoop_RecursionLimitEnforced(t *testing.T) {
 func TestPregelLoop_NodeError(t *testing.T) {
 	sentinel := errors.New("node exploded")
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("boom", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("boom", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), sentinel
 	})
 	g.AddEdge(START, "boom")
@@ -395,7 +396,7 @@ func TestPregelLoop_NodeError(t *testing.T) {
 
 func TestPregelLoop_StreamUpdatesMode(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("n", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"k": "v"})), nil
 	})
 	g.AddEdge(START, "n")
@@ -427,7 +428,7 @@ func TestPregelLoop_RetryOnNodeFailure(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
 	g.nodes["flaky"] = &NodeSpec[map[string]any]{
 		Name: "flaky",
-		Fn: func(ctx context.Context, state map[string]any) (NodeResult, error) {
+		Fn: func(_ context.Context, _ map[string]any) (NodeResult, error) {
 			n := atomic.AddInt32(&calls, 1)
 			if n < 3 {
 				return NoNodeResult(), errors.New("transient error")
@@ -476,10 +477,10 @@ func TestPregelLoop_BinaryOperatorChannel(t *testing.T) {
 		return []any{a, b}
 	})
 
-	g.AddNode("append_hello", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("append_hello", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"messages": "hello"})), nil
 	})
-	g.AddNode("append_world", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("append_world", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"messages": "world"})), nil
 	})
 	g.AddEdge(START, "append_hello")
@@ -510,10 +511,10 @@ func TestPregelLoop_AnyValueClearsOnIdleStep(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
 	g.channels["scratch"] = NewAnyValue()
 
-	g.AddNode("writer", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("writer", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"scratch": "set"})), nil
 	})
-	g.AddNode("idle", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("idle", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(START, "writer")
@@ -539,10 +540,10 @@ func TestPregelLoop_EphemeralValueClearsOnIdleStep(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
 	g.channels["ephemeral"] = NewEphemeralValue(true)
 
-	g.AddNode("writer", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("writer", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"ephemeral": "set"})), nil
 	})
-	g.AddNode("idle", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("idle", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(START, "writer")
@@ -568,10 +569,10 @@ func TestPregelLoop_TopicAccumulatePersistsAcrossIdleStep(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
 	g.channels["events"] = NewTopic(true)
 
-	g.AddNode("writer", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("writer", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"events": "event-a"})), nil
 	})
-	g.AddNode("idle", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("idle", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(START, "writer")
@@ -602,10 +603,10 @@ func TestPregelLoop_TopicNonAccumulateClearsOnIdleStep(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
 	g.channels["events"] = NewTopic(false)
 
-	g.AddNode("writer", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("writer", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"events": "event-a"})), nil
 	})
-	g.AddNode("idle", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("idle", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(START, "writer")
@@ -637,7 +638,7 @@ func TestPregelLoop_IgnoresUnknownChannelWritesForTypedState(t *testing.T) {
 	g := NewStateGraph[typedState]()
 	g.channels["Known"] = NewLastValue()
 
-	g.AddNode("writer", func(ctx context.Context, state typedState) (NodeResult, error) {
+	g.AddNode("writer", func(_ context.Context, _ typedState) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"Known": 1, "Unknown": 2})), nil
 	})
 	g.AddEdge(START, "writer")
@@ -679,17 +680,17 @@ func TestPregelLoop_SendFanoutNotReplayedOnLaterSteps(t *testing.T) {
 		return ai + bi
 	})
 
-	g.AddNode("sender", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("sender", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		GetSend(ctx)("worker", Dyn(map[string]any{"n": 1}))
 		return NoNodeResult(), nil
 	})
-	g.AddNode("worker", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("worker", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"count": state["n"]})), nil
 	})
-	g.AddNode("step1", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("step1", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("step2", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("step2", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 
@@ -719,11 +720,11 @@ func TestPregelLoop_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("slow", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("slow", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		cancel() // cancel from inside the node
 		return NodeWrites(DynMap(map[string]any{})), nil
 	})
-	g.AddNode("never", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("never", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		t.Error("node 'never' should not have been executed")
 		return NoNodeResult(), nil
 	})
@@ -744,7 +745,7 @@ func TestPregelLoop_ContextCancelled(t *testing.T) {
 
 func TestPregelLoop_StepTimeoutEnforced(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("slow", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("slow", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		select {
 		case <-ctx.Done():
 			return NoNodeResult(), ctx.Err()
@@ -752,7 +753,7 @@ func TestPregelLoop_StepTimeoutEnforced(t *testing.T) {
 			return NodeWrites(DynMap(map[string]any{"slow": true})), nil
 		}
 	})
-	g.AddNode("fast", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("fast", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"fast": true})), nil
 	})
 	g.AddEdge(START, "slow")
@@ -789,7 +790,7 @@ func TestPregelLoop_StepTimeoutEnforced(t *testing.T) {
 func TestPregelLoop_StepTimeoutSavesCheckpointOnFailure(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("slow", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("slow", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		select {
 		case <-ctx.Done():
 			return NoNodeResult(), ctx.Err()
@@ -828,7 +829,7 @@ func TestPregelLoop_MaxConcurrencyLimitsFanoutAndKeepsWriteOrder(t *testing.T) {
 	var inFlight atomic.Int64
 	var maxInFlight atomic.Int64
 
-	g.AddNode("dispatch", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("dispatch", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		sends := make([]Send, 0, 100)
 		for i := 0; i < 100; i++ {
 			sends = append(sends, Send{Node: "worker", Arg: Dyn(map[string]any{"idx": i})})
@@ -954,9 +955,125 @@ func TestApplyTaskWrites_OrdersWritesByTaskPath(t *testing.T) {
 	}
 }
 
+func TestRoutingTargets_AppliesPathMapAndFiltersInvalid(t *testing.T) {
+	route := Route{
+		Nodes: []string{"raw", "mapped", "", END},
+	}
+	pathMap := map[string]string{
+		"mapped": "dest",
+	}
+
+	targets := routingTargets(route, pathMap)
+	if len(targets) != 2 || targets[0] != "raw" || targets[1] != "dest" {
+		t.Fatalf("routingTargets = %#v, want [raw dest]", targets)
+	}
+}
+
+func TestRoutingTargetsBoth_SplitsNodeTargetsAndSends(t *testing.T) {
+	route := Route{
+		Nodes: []string{"left", END},
+		Sends: []Send{
+			{Node: "worker", Arg: Dyn("ok")},
+			{Node: "", Arg: Dyn("skip")},
+			{Node: END, Arg: Dyn("skip")},
+		},
+	}
+
+	nodes, sends, err := routingTargetsBoth(route, nil)
+	if err != nil {
+		t.Fatalf("routingTargetsBoth error: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0] != "left" {
+		t.Fatalf("routingTargetsBoth nodes = %#v, want [left]", nodes)
+	}
+	if len(sends) != 1 || sends[0].Node != "worker" {
+		t.Fatalf("routingTargetsBoth sends = %#v, want only worker send", sends)
+	}
+}
+
+func TestPregelChannelMap_ConsumeChannels(t *testing.T) {
+	ready := NewNamedBarrierValue([]string{"source"})
+	if _, err := ready.Update([]Dynamic{Dyn("source")}); err != nil {
+		t.Fatalf("seed ready channel: %v", err)
+	}
+	other := NewNamedBarrierValue([]string{"source"})
+	if _, err := other.Update([]Dynamic{Dyn("source")}); err != nil {
+		t.Fatalf("seed other channel: %v", err)
+	}
+
+	channels := newPregelChannelMap(map[string]Channel{
+		"ready": ready,
+		"other": other,
+	})
+
+	changed := channels.consumeChannels([]string{"ready", "missing"})
+	if len(changed) != 1 || !changed["ready"] {
+		t.Fatalf("consume changed = %#v, want only ready", changed)
+	}
+	if channels.channels["ready"].IsAvailable() {
+		t.Fatal("ready channel should be consumed and unavailable")
+	}
+	if !channels.channels["other"].IsAvailable() {
+		t.Fatal("other channel should remain available")
+	}
+}
+
+func TestApplyTaskWrites_ConsumesOnlyTriggeredChannels(t *testing.T) {
+	g := NewStateGraph[map[string]any]()
+
+	triggered := NewNamedBarrierValue([]string{"source"})
+	if _, err := triggered.Update([]Dynamic{Dyn("source")}); err != nil {
+		t.Fatalf("seed triggered channel: %v", err)
+	}
+	notTriggered := NewNamedBarrierValue([]string{"source"})
+	if _, err := notTriggered.Update([]Dynamic{Dyn("source")}); err != nil {
+		t.Fatalf("seed non-triggered channel: %v", err)
+	}
+
+	channels := newPregelChannelMap(map[string]Channel{
+		"triggered":     triggered,
+		"not_triggered": notTriggered,
+	})
+
+	tasks := []pregelTask[map[string]any]{
+		{
+			id:       "task-1",
+			name:     "worker",
+			path:     []any{"pull", "worker"},
+			triggers: []string{"triggered"},
+		},
+	}
+	results := []pregelTaskResult{{
+		taskID: "task-1",
+		node:   "worker",
+		path:   []any{"pull", "worker"},
+	}}
+
+	_, versionBumped, updatedChannels, err := applyTaskWrites(g, channels, tasks, results, nil, false)
+	if err != nil {
+		t.Fatalf("applyTaskWrites: %v", err)
+	}
+
+	if !versionBumped["triggered"] {
+		t.Fatalf("versionBumped = %#v, want triggered consumed", versionBumped)
+	}
+	if versionBumped["not_triggered"] {
+		t.Fatalf("versionBumped = %#v, did not expect not_triggered", versionBumped)
+	}
+	if len(updatedChannels) != 0 {
+		t.Fatalf("updatedChannels = %#v, want empty", updatedChannels)
+	}
+	if channels.channels["triggered"].IsAvailable() {
+		t.Fatal("triggered channel should have been consumed")
+	}
+	if !channels.channels["not_triggered"].IsAvailable() {
+		t.Fatal("not_triggered channel should still be available")
+	}
+}
+
 func TestPregelLoop_CompileDefaultStepTimeoutApplied(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("slow", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("slow", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		select {
 		case <-ctx.Done():
 			return NoNodeResult(), ctx.Err()
@@ -987,14 +1104,14 @@ func TestPregelLoop_CompileDefaultMaxConcurrencyApplied(t *testing.T) {
 	var inFlight atomic.Int64
 	var maxInFlight atomic.Int64
 
-	g.AddNode("dispatch", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("dispatch", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		sends := make([]Send, 0, 30)
 		for i := 0; i < 30; i++ {
 			sends = append(sends, Send{Node: "worker", Arg: Dyn(map[string]any{"idx": i})})
 		}
 		return NodeCommand(&Command{Goto: RouteWithSends(sends...)}), nil
 	})
-	g.AddNode("worker", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("worker", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		now := inFlight.Add(1)
 		for {
 			currentMax := maxInFlight.Load()
@@ -1031,11 +1148,11 @@ func TestPregelLoop_CompileDefaultMaxConcurrencyApplied(t *testing.T) {
 // receiver; routing is purely via the fan-out Send.
 func TestPregelLoop_SendFanout(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("sender", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("sender", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		GetSend(ctx)("receiver", Dyn(map[string]any{"msg": "ping"}))
 		return NoNodeResult(), nil
 	})
-	g.AddNode("receiver", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("receiver", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		// PUSH task: state is Send.Arg, so state["msg"] == "ping"
 		return NodeWrites(DynMap(map[string]any{"received": state["msg"]})), nil
 	})
@@ -1060,10 +1177,10 @@ func TestPregelLoop_SendFanout(t *testing.T) {
 
 func TestPregelLoop_InterruptBefore(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"ran": "a"})), nil
 	})
-	g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"ran": "b"})), nil
 	})
 	g.AddEdge(START, "a")
@@ -1092,7 +1209,7 @@ func TestPregelLoop_InterruptBefore(t *testing.T) {
 
 func TestPregelLoop_StreamValuesMode(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("step1", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("step1", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"step": 1})), nil
 	})
 	g.AddEdge(START, "step1")
@@ -1121,7 +1238,7 @@ func TestPregelLoop_StreamValuesMode(t *testing.T) {
 
 func TestPregelLoop_StreamMessagesMode(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("llm", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("llm", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		StreamMessage(ctx, "hel", map[string]any{"index": 0})
 		StreamMessage(ctx, "lo", map[string]any{"index": 1})
 		return NodeWrites(DynMap(map[string]any{"done": true})), nil
@@ -1161,7 +1278,7 @@ func TestPregelLoop_StreamMessagesMode(t *testing.T) {
 func TestPregelLoop_StreamCheckpointsModeIncludesNamespace(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("n", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"k": "v"})), nil
 	})
 	g.AddEdge(START, "n")
@@ -1209,7 +1326,7 @@ func TestPregelLoop_StreamCheckpointsModeIncludesNamespace(t *testing.T) {
 
 func TestPregelLoop_StreamTasksIncludesTaskResultEnvelope(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("n", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"k": "v"})), nil
 	})
 	g.AddEdge(START, "n")
@@ -1251,7 +1368,7 @@ func TestPregelLoop_StreamTasksIncludesTaskResultEnvelope(t *testing.T) {
 func TestPregelLoop_StreamDebugWrapsTaskAndCheckpointEvents(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("n", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"k": "v"})), nil
 	})
 	g.AddEdge(START, "n")
@@ -1301,7 +1418,7 @@ func TestPregelLoop_StreamDebugWrapsTaskAndCheckpointEvents(t *testing.T) {
 
 func TestPregelLoop_StreamDuplexCombinesModes(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("n", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"k": "v"})), nil
 	})
 	g.AddEdge(START, "n")
@@ -1354,18 +1471,27 @@ func TestPregelLoop_EmptyGraphErrors(t *testing.T) {
 // TestPregelLoop_MultipleNodesPerSuperstep verifies that when multiple nodes
 // are triggered from the same source, all run in the same superstep.
 func TestPregelLoop_MultipleNodesPerSuperstep(t *testing.T) {
-	var order []string
+	var (
+		orderMu sync.Mutex
+		order   []string
+	)
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		orderMu.Lock()
 		order = append(order, "a")
+		orderMu.Unlock()
 		return NoNodeResult(), nil
 	})
-	g.AddNode("b1", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b1", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		orderMu.Lock()
 		order = append(order, "b1")
+		orderMu.Unlock()
 		return NodeWrites(DynMap(map[string]any{"b1": true})), nil
 	})
-	g.AddNode("b2", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b2", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		orderMu.Lock()
 		order = append(order, "b2")
+		orderMu.Unlock()
 		return NodeWrites(DynMap(map[string]any{"b2": true})), nil
 	})
 
@@ -1407,16 +1533,16 @@ func TestPregelLoop_MultipleNodesPerSuperstep(t *testing.T) {
 
 func TestPregelLoop_WaitingEdgeActsAsPersistentJoinBarrier(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"a": true})), nil
 	})
-	g.AddNode("mid", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("mid", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"b": true})), nil
 	})
-	g.AddNode("join", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("join", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"joined": true})), nil
 	})
 	g.AddEdge(START, "a")
@@ -1448,13 +1574,13 @@ func TestPregelLoop_DeferredWaitingJoinRunsAfterFinish(t *testing.T) {
 	var joinRuns atomic.Int64
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"a": true})), nil
 	})
-	g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"b": true})), nil
 	})
-	g.AddNode("join", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("join", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		joinRuns.Add(1)
 		return NodeWrites(DynMap(map[string]any{"deferred_join": true})), nil
 	})
@@ -1492,15 +1618,15 @@ func TestPregelLoop_DeferredWaitingJoinRunsAfterFinish(t *testing.T) {
 // a Send dispatches a PUSH task whose input is Send.Arg.
 func TestPregelLoop_BranchReturnedSend(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("router", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("router", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("worker", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("worker", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"result": state["payload"]})), nil
 	})
 	g.AddEdge(START, "router")
 	g.AddConditionalEdges("router",
-		func(ctx context.Context, state map[string]any) (Route, error) {
+		func(_ context.Context, _ map[string]any) (Route, error) {
 			return RouteWithSends(Send{Node: "worker", Arg: Dyn(map[string]any{"payload": "hello"})}), nil
 		}, nil)
 	g.AddEdge("worker", END)
@@ -1533,13 +1659,13 @@ func TestPregelLoop_MultipleSendFanout(t *testing.T) {
 		return []any{a, b}
 	})
 
-	g.AddNode("dispatcher", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("dispatcher", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		send := GetSend(ctx)
 		send("worker", Dyn(map[string]any{"n": 1}))
 		send("worker", Dyn(map[string]any{"n": 2}))
 		return NoNodeResult(), nil
 	})
-	g.AddNode("worker", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("worker", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"items": state["n"]})), nil
 	})
 	g.AddEdge(START, "dispatcher")
@@ -1565,10 +1691,10 @@ func TestPregelLoop_MultipleSendFanout(t *testing.T) {
 // to a node with Send.Arg as input in the next superstep.
 func TestPregelLoop_CommandGotoSend(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("gate", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("gate", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeCommand(&Command{Goto: RouteWithSends(Send{Node: "handler", Arg: Dyn(map[string]any{"value": 42})})}), nil
 	})
-	g.AddNode("handler", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("handler", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"answer": state["value"]})), nil
 	})
 	g.AddEdge(START, "gate")
@@ -1595,11 +1721,11 @@ func TestPregelLoop_SendPayloadCoercesToTypedState(t *testing.T) {
 	}
 
 	g := NewStateGraph[S]()
-	g.AddNode("sender", func(ctx context.Context, state S) (NodeResult, error) {
+	g.AddNode("sender", func(ctx context.Context, _ S) (NodeResult, error) {
 		GetSend(ctx)("receiver", Dyn(map[string]any{"value": "from-send"}))
 		return NoNodeResult(), nil
 	})
-	g.AddNode("receiver", func(ctx context.Context, state S) (NodeResult, error) {
+	g.AddNode("receiver", func(_ context.Context, state S) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"Value": state.Value})), nil
 	})
 	g.AddEdge(START, "sender")
@@ -1626,11 +1752,11 @@ func TestPregelLoop_SendPayloadTypeMismatchErrors(t *testing.T) {
 	}
 
 	g := NewStateGraph[S]()
-	g.AddNode("sender", func(ctx context.Context, state S) (NodeResult, error) {
+	g.AddNode("sender", func(ctx context.Context, _ S) (NodeResult, error) {
 		GetSend(ctx)("receiver", Dyn(123))
 		return NoNodeResult(), nil
 	})
-	g.AddNode("receiver", func(ctx context.Context, state S) (NodeResult, error) {
+	g.AddNode("receiver", func(_ context.Context, _ S) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(START, "sender")
@@ -1652,11 +1778,11 @@ func TestPregelLoop_SendPayloadTypeMismatchErrors(t *testing.T) {
 
 func TestPregelLoop_FunctionalCallFanout(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("dispatch", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("dispatch", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		GetCall(ctx)(Call{
 			Name: "double",
 			Arg:  Dyn(21),
-			Fn: func(ctx context.Context, input Dynamic) (NodeResult, error) {
+			Fn: func(_ context.Context, input Dynamic) (NodeResult, error) {
 				n, ok := input.Value().(int)
 				if !ok {
 					return NoNodeResult(), fmt.Errorf("call input type = %T", input.Value())
@@ -1695,12 +1821,12 @@ func TestPregelLoop_ParallelExecution(t *testing.T) {
 		return ai + bi
 	})
 
-	g.AddNode("start", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("start", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	for i := 0; i < 5; i++ {
 		name := fmt.Sprintf("w%d", i)
-		g.AddNode(name, func(ctx context.Context, state map[string]any) (NodeResult, error) {
+		g.AddNode(name, func(_ context.Context, _ map[string]any) (NodeResult, error) {
 			return NodeWrites(DynMap(map[string]any{"counter": 1})), nil
 		})
 		g.AddEdge("start", name)
@@ -1734,7 +1860,7 @@ func TestStructState_ReflectionIO(t *testing.T) {
 	}
 
 	g := NewStateGraph[MyState]()
-	g.AddNode("incr", func(ctx context.Context, state MyState) (NodeResult, error) {
+	g.AddNode("incr", func(_ context.Context, state MyState) (NodeResult, error) {
 		return NodeState(Dyn(MyState{Name: state.Name + "!", Count: state.Count + 1})), nil
 	})
 	g.AddEdge(START, "incr")
@@ -1765,12 +1891,12 @@ func TestStructState_ReflectionIO(t *testing.T) {
 // the AddMessages reducer so messages accumulate across nodes.
 func TestMessagesStateGraph_AddMessages(t *testing.T) {
 	g := NewMessagesStateGraph()
-	g.AddNode("node1", func(ctx context.Context, state MessagesState) (NodeResult, error) {
+	g.AddNode("node1", func(_ context.Context, _ MessagesState) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{
 			"Messages": []Message{{ID: "1", Role: "user", Content: "hi"}},
 		})), nil
 	})
-	g.AddNode("node2", func(ctx context.Context, state MessagesState) (NodeResult, error) {
+	g.AddNode("node2", func(_ context.Context, _ MessagesState) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{
 			"Messages": []Message{{ID: "2", Role: "assistant", Content: "hello"}},
 		})), nil
@@ -1803,7 +1929,7 @@ func TestMessagesStateGraph_AddMessages(t *testing.T) {
 // surfaces an Interrupt in the result.
 func TestNodeInterrupt_HaltsNode(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("ask", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("ask", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		NodeInterrupt(ctx, Dyn("need input"))
 		// Should not reach here.
 		return NodeWrites(DynMap(map[string]any{"reached": true})), nil
@@ -2098,7 +2224,7 @@ func TestNormalizeResumeValues_Dynamic(t *testing.T) {
 // Compile-time check: CompiledStateGraph.Stream produces typed StreamPart values.
 func TestPregelLoop_StreamErrorTerminates(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("err_node", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("err_node", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), fmt.Errorf("intentional error")
 	})
 	g.AddEdge(START, "err_node")
@@ -2126,7 +2252,7 @@ func TestPregelLoop_StreamErrorTerminates(t *testing.T) {
 func TestPregelLoop_PersistsErrorChannelWriteOnFailure(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("err_node", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("err_node", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), fmt.Errorf("intentional error")
 	})
 	g.AddEdge(START, "err_node")
@@ -2178,10 +2304,10 @@ func TestPregelLoop_TaskFailureCancelsSiblingTasks(t *testing.T) {
 	var canceled atomic.Bool
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("fail", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("fail", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), errors.New("boom")
 	})
-	g.AddNode("slow", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("slow", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		select {
 		case <-ctx.Done():
 			canceled.Store(true)
@@ -2211,14 +2337,14 @@ func TestPregelLoop_TaskFailureCancelsSiblingTasks(t *testing.T) {
 
 func TestPregelLoop_BranchRoutePathMap(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("router", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("router", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("left", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("left", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"path": "left"})), nil
 	})
 	g.AddEdge(START, "router")
-	g.AddConditionalEdges("router", func(ctx context.Context, state map[string]any) (Route, error) {
+	g.AddConditionalEdges("router", func(_ context.Context, _ map[string]any) (Route, error) {
 		return RouteTo("L"), nil
 	}, map[string]string{"L": "left"})
 	g.AddEdge("left", END)
@@ -2240,7 +2366,7 @@ func TestPregelLoop_BranchRoutePathMap(t *testing.T) {
 
 func TestPregelLoop_UnsupportedNodeOutputTypeErrors(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("bad", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("bad", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeState(Dyn(123)), nil
 	})
 	g.AddEdge(START, "bad")
@@ -2260,7 +2386,7 @@ func TestPregelLoop_UnsupportedNodeOutputTypeErrors(t *testing.T) {
 func TestPregelLoop_CheckpointTracksVersionsSeen(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"x": 1})), nil
 	})
 	g.AddEdge(START, "a")
@@ -2305,7 +2431,7 @@ func TestPregelLoop_CheckpointTracksVersionsSeen(t *testing.T) {
 
 func TestPregelTaskStructure_DeterministicTaskIDs(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"x": 1})), nil
 	})
 	g.AddEdge(START, "a")
@@ -2330,13 +2456,13 @@ func TestPregelTaskStructure_DeterministicTaskIDs(t *testing.T) {
 
 func TestPregelTaskStructure_WaitingJoinUsesJoinTriggerForID(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"a": true})), nil
 	})
-	g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"b": true})), nil
 	})
-	g.AddNode("join", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("join", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"joined": true})), nil
 	})
 	g.AddEdge(START, "a")
@@ -2387,11 +2513,11 @@ func TestPregelTaskStructure_WaitingJoinUsesJoinTriggerForID(t *testing.T) {
 
 func TestPregelTaskStructure_TracksTaskPathForPushAndPull(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("sender", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("sender", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		GetSend(ctx)("receiver", Dyn(map[string]any{"msg": "ping"}))
 		return NoNodeResult(), nil
 	})
-	g.AddNode("receiver", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("receiver", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"seen": state["msg"]})), nil
 	})
 	g.AddEdge(START, "sender")
@@ -2424,10 +2550,10 @@ func TestPregelTaskStructure_TracksTaskPathForPushAndPull(t *testing.T) {
 
 func TestPregelTaskStructure_AppliesNodeWriters(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.SetNodeWriters("a", func(ctx context.Context, task TaskContext[map[string]any], result NodeResult) (NodeResult, error) {
+	g.SetNodeWriters("a", func(_ context.Context, _ TaskContext[map[string]any], result NodeResult) (NodeResult, error) {
 		if result.Writes == nil {
 			result.Writes = map[string]Dynamic{}
 		}
@@ -2455,7 +2581,7 @@ func TestPregelTaskStructure_AppliesNodeWriters(t *testing.T) {
 func TestPregelLoop_ResumeMapByInterruptID(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("ask", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("ask", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		answer := NodeInterrupt(ctx, Dyn("what is your name?"))
 		return NodeWrites(DynMap(map[string]any{"answer": answer.Value()})), nil
 	})
@@ -2504,11 +2630,11 @@ func TestPregelLoop_ResumeMapByInterruptID(t *testing.T) {
 func TestPregelLoop_ResumeRequiresMapWhenMultiplePendingInterrupts(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		NodeInterrupt(ctx, Dyn("a?"))
 		return NoNodeResult(), nil
 	})
-	g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		NodeInterrupt(ctx, Dyn("b?"))
 		return NoNodeResult(), nil
 	})
@@ -2548,10 +2674,10 @@ func TestPregelLoop_ResumeRequiresMapWhenMultiplePendingInterrupts(t *testing.T)
 func TestPregelLoop_InterruptBeforeUsesVersionChecksOnResume(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"x": 1})), nil
 	})
-	g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"done": true})), nil
 	})
 	g.AddEdge(START, "a")
@@ -2602,10 +2728,10 @@ func TestPregelTaskStructure_EmitsTaskCacheKeyInputSchemaAndSubgraphs(t *testing
 	}
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNodeFunc("typed", func(ctx context.Context, in nodeInput) (NodeResult, error) {
+	g.AddNodeFunc("typed", func(_ context.Context, in nodeInput) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"message": in.Message})), nil
 	})
-	g.SetNodeCachePolicy("typed", &CachePolicy{KeyFunc: func(input any) string { return "cache-key" }})
+	g.SetNodeCachePolicy("typed", &CachePolicy{KeyFunc: func(_ any) string { return "cache-key" }})
 	g.SetNodeSubgraphs("typed", "math_subgraph", "io_subgraph")
 	g.AddEdge(START, "typed")
 	g.AddEdge("typed", END)
@@ -2643,7 +2769,7 @@ func TestPregelTaskStructure_EmitsTaskCacheKeyInputSchemaAndSubgraphs(t *testing
 
 func TestPregelTaskStructure_EmitsTaskCheckpointNamespaceMetadata(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("n", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"done": true})), nil
 	})
 	g.AddEdge(START, "n")
@@ -2727,7 +2853,7 @@ func taskEventStep(t *testing.T, payload map[string]any) int {
 func TestSubgraph_ParentCommandUpdatesPropagateToParent(t *testing.T) {
 	// Subgraph: one node that issues a parent command with a state update.
 	sub := NewStateGraph[map[string]any]()
-	sub.AddNode("sub_node", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	sub.AddNode("sub_node", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		parent := CommandParent
 		return NodeCommand(&Command{
 			Graph:  &parent,
@@ -2744,7 +2870,7 @@ func TestSubgraph_ParentCommandUpdatesPropagateToParent(t *testing.T) {
 	// Parent graph: routes through the subgraph node, then a finalizer.
 	parent := NewStateGraph[map[string]any]()
 	parent.AddNode("subgraph_node", compiledSub.AsSubgraphNode("subgraph_node"))
-	parent.AddNode("after", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	parent.AddNode("after", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"after_ran": true})), nil
 	})
 	parent.AddEdge(START, "subgraph_node")
@@ -2772,7 +2898,7 @@ func TestSubgraph_ParentCommandUpdatesPropagateToParent(t *testing.T) {
 // Goto field routes execution in the parent graph rather than the subgraph.
 func TestSubgraph_ParentCommandGotoRoutesParent(t *testing.T) {
 	sub := NewStateGraph[map[string]any]()
-	sub.AddNode("sub_node", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	sub.AddNode("sub_node", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		parent := CommandParent
 		return NodeCommand(&Command{
 			Graph: &parent,
@@ -2789,11 +2915,11 @@ func TestSubgraph_ParentCommandGotoRoutesParent(t *testing.T) {
 	var routedRan bool
 	parent := NewStateGraph[map[string]any]()
 	parent.AddNode("subgraph_node", compiledSub.AsSubgraphNode("subgraph_node"))
-	parent.AddNode("routed_node", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	parent.AddNode("routed_node", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		routedRan = true
 		return NodeWrites(DynMap(map[string]any{"routed": true})), nil
 	})
-	parent.AddNode("unreachable", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	parent.AddNode("unreachable", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		t.Error("unreachable node should not run")
 		return NodeResult{}, nil
 	})
@@ -2822,7 +2948,7 @@ func TestSubgraph_ParentCommandGotoRoutesParent(t *testing.T) {
 // goto routing work together when issued via a parent command.
 func TestSubgraph_ParentCommandWithUpdateAndGoto(t *testing.T) {
 	sub := NewStateGraph[map[string]any]()
-	sub.AddNode("sub_node", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	sub.AddNode("sub_node", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		p := CommandParent
 		return NodeCommand(&Command{
 			Graph:  &p,
@@ -2839,7 +2965,7 @@ func TestSubgraph_ParentCommandWithUpdateAndGoto(t *testing.T) {
 
 	parent := NewStateGraph[map[string]any]()
 	parent.AddNode("sub", compiledSub.AsSubgraphNode("sub"))
-	parent.AddNode("landing", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	parent.AddNode("landing", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"landed": true})), nil
 	})
 	parent.AddEdge(START, "sub")
@@ -2866,7 +2992,7 @@ func TestSubgraph_ParentCommandWithUpdateAndGoto(t *testing.T) {
 // a node in a root (non-subgraph) graph returns an error to the caller.
 func TestRootGraph_ParentCommandErrors(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("node", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("node", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		p := CommandParent
 		return NodeCommand(&Command{
 			Graph:  &p,

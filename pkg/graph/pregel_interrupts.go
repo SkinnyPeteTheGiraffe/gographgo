@@ -357,6 +357,9 @@ func interruptTasks[State any](
 	if len(interruptNodes) == 0 || !hasNewUpdatesSinceLastInterrupt(channelVersions, versionsSeen) {
 		return nil
 	}
+	if !shouldInterruptBefore(tasks, interruptNodes) {
+		return nil
+	}
 	out := make([]pregelTask[State], 0, len(tasks))
 	for _, task := range tasks {
 		for _, name := range interruptNodes {
@@ -376,6 +379,9 @@ func interruptResults(
 	versionsSeen map[string]map[string]int64,
 ) []pregelTaskResult {
 	if len(interruptNodes) == 0 || !hasNewUpdatesSinceLastInterrupt(channelVersions, versionsSeen) {
+		return nil
+	}
+	if !shouldInterruptAfter(results, interruptNodes) {
 		return nil
 	}
 	out := make([]pregelTaskResult, 0, len(results))

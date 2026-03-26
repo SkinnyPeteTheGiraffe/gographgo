@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"strings"
-	"time"
 )
 
 type JSONSchema struct {
@@ -189,10 +188,6 @@ func generateJSONSchemaWithChannels(t reflect.Type, channels map[string]Channel,
 	return generateJSONSchema(t, name)
 }
 
-func mergeChannelInfo(schema *JSONSchema, ch Channel) *JSONSchema {
+func mergeChannelInfo(schema *JSONSchema, _ Channel) *JSONSchema {
 	return schema
-}
-
-func formatTimeRFC3339(t time.Time) string {
-	return t.Format(time.RFC3339)
 }

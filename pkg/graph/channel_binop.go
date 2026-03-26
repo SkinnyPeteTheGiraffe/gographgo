@@ -267,7 +267,7 @@ func (c *BinaryOperatorAggregate) Copy() Channel {
 // String returns a human-readable description.
 func (c *BinaryOperatorAggregate) String() string {
 	if !c.hasValue {
-		return fmt.Sprintf("BinaryOperatorAggregate(empty)")
+		return "BinaryOperatorAggregate(empty)"
 	}
 	return fmt.Sprintf("BinaryOperatorAggregate(%v)", c.val.Value())
 }

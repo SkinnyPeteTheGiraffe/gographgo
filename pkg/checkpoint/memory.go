@@ -104,15 +104,8 @@ func (s *InMemorySaver) GetTuple(ctx context.Context, config *Config) (*Checkpoi
 		return s.hydrateTupleLocked(t)
 	}
 
-	// Return the latest checkpoint (greatest ID lexicographically — UUIDs are
-	// monotonically increasing so this is correct).
-	var latest *CheckpointTuple
-	for _, t := range byID {
-		if latest == nil || t.Checkpoint.ID > latest.Checkpoint.ID {
-			latest = t
-		}
-	}
-	return s.hydrateTupleLocked(latest)
+	// Return the latest checkpoint for this namespace.
+	return s.hydrateTupleLocked(s.latestLocked(config.ThreadID, ns))
 }
 
 // Put stores a checkpoint and returns the updated config with CheckpointID set.
@@ -606,14 +599,21 @@ func (s *InMemorySaver) hydrateTupleLocked(t *CheckpointTuple) (*CheckpointTuple
 // latestLocked returns the latest tuple for (threadID, ns) without acquiring locks.
 // Caller must hold at least a read lock.
 func (s *InMemorySaver) latestLocked(threadID, ns string) *CheckpointTuple {
-	byID := s.storage[threadID][ns]
-	var latest *CheckpointTuple
-	for _, t := range byID {
-		if latest == nil || t.Checkpoint.ID > latest.Checkpoint.ID {
-			latest = t
+	byNS := s.storage[threadID]
+	if byNS == nil {
+		return nil
+	}
+	byID := byNS[ns]
+	if len(byID) == 0 {
+		return nil
+	}
+	var latestID string
+	for checkpointID := range byID {
+		if checkpointID > latestID {
+			latestID = checkpointID
 		}
 	}
-	return latest
+	return byID[latestID]
 }
 
 // sortByIDDesc sorts tuples in-place, descending by Checkpoint.ID.

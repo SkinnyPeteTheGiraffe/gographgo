@@ -520,10 +520,10 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request, threadID stri
 
 	s.publishEvent(threadID, run.ID, RunEvent{Type: "run.created", ThreadID: threadID, RunID: run.ID, Timestamp: now, Payload: map[string]any{"status": string(RunStatusPending)}})
 
-	go s.executeRun(context.Background(), run.ID, threadID)
-
 	w.Header().Set("Content-Location", fmt.Sprintf("/v1/threads/%s/runs/%s", threadID, run.ID))
 	writeJSON(w, http.StatusAccepted, run)
+
+	go s.executeRun(context.Background(), run.ID, threadID)
 }
 
 func (s *Server) createRunLocked(threadID string, req CreateRunRequest) *Run {
@@ -857,6 +857,83 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request, threadID 
 }
 
 func (s *Server) handleStore(w http.ResponseWriter, r *http.Request, threadID string, suffix []string) {
+	if len(suffix) == 1 && suffix[0] == "namespaces" {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		var req struct {
+			Prefix   []string `json:"prefix,omitempty"`
+			Suffix   []string `json:"suffix,omitempty"`
+			MaxDepth *int     `json:"max_depth,omitempty"`
+			Limit    int      `json:"limit,omitempty"`
+			Offset   int      `json:"offset,omitempty"`
+		}
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := rejectUnsupportedStoreNamespaces(req.MaxDepth); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+
+		s.mu.RLock()
+		bucket := s.store[threadID]
+		s.mu.RUnlock()
+		namespaces := make([][]string, 0, len(bucket))
+		for ns := range bucket {
+			parts := strings.Split(ns, ".")
+			if len(req.Prefix) > 0 {
+				if len(parts) < len(req.Prefix) {
+					continue
+				}
+				matched := true
+				for i, part := range req.Prefix {
+					if parts[i] != part {
+						matched = false
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+			if len(req.Suffix) > 0 {
+				if len(parts) < len(req.Suffix) {
+					continue
+				}
+				start := len(parts) - len(req.Suffix)
+				matched := true
+				for i, part := range req.Suffix {
+					if parts[start+i] != part {
+						matched = false
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+			namespaces = append(namespaces, parts)
+		}
+		sort.Slice(namespaces, func(i, j int) bool {
+			return strings.Join(namespaces[i], ".") < strings.Join(namespaces[j], ".")
+		})
+		if req.Offset > 0 {
+			if req.Offset >= len(namespaces) {
+				namespaces = [][]string{}
+			} else {
+				namespaces = namespaces[req.Offset:]
+			}
+		}
+		if req.Limit > 0 && req.Limit < len(namespaces) {
+			namespaces = namespaces[:req.Limit]
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"namespaces": namespaces})
+		return
+	}
+
 	if len(suffix) < 2 {
 		http.NotFound(w, r)
 		return
@@ -868,8 +945,14 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request, threadID st
 	case http.MethodPut:
 		var req struct {
 			Value map[string]any `json:"value"`
+			Index any            `json:"index,omitempty"`
+			TTL   *int           `json:"ttl,omitempty"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := rejectUnsupportedStorePut(req.Index, req.TTL); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -884,6 +967,15 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request, threadID st
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, StoreValue{Namespace: namespace, Key: key, Value: cloneMap(req.Value)})
 	case http.MethodGet:
+		refreshTTL, err := parseOptionalBoolQueryValue(r.URL.Query().Get("refresh_ttl"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := rejectUnsupportedStoreSearch(nil, r.URL.Query().Get("query"), refreshTTL); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 		s.mu.RLock()
 		v := cloneMap(s.store[threadID][namespace][key])
 		s.mu.RUnlock()
@@ -1547,6 +1639,7 @@ func (s *Server) awaitRunCompletionAndStream(ctx context.Context, w http.Respons
 	if rec.done == nil {
 		return fmt.Errorf("run completion unavailable")
 	}
+	replayedEvents := len(rec.events)
 
 	for _, evt := range rec.events {
 		parts := s.streamPartsForRunEvent(threadID, runID, modes, evt)
@@ -1565,7 +1658,19 @@ func (s *Server) awaitRunCompletionAndStream(ctx context.Context, w http.Respons
 		return fmt.Errorf("run not found")
 	}
 	if original.closed {
+		missed := make([]RunEvent, 0)
+		if replayedEvents < len(original.events) {
+			missed = append(missed, original.events[replayedEvents:]...)
+		}
 		s.mu.Unlock()
+		for _, evt := range missed {
+			parts := s.streamPartsForRunEvent(threadID, runID, modes, evt)
+			for _, part := range parts {
+				if err := writePart(part.Event, part.Payload); err != nil {
+					return err
+				}
+			}
+		}
 		if err := writePart("end", map[string]any{}); err != nil {
 			return err
 		}
@@ -1856,7 +1961,8 @@ func (s *Server) handleGlobalStoreItems(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusNotFound, fmt.Errorf("store item not found"))
 			return
 		}
-		writeJSON(w, http.StatusOK, serverStoreItemFromGraph(item))
+		response := serverStoreItemFromGraph(item)
+		writeJSON(w, http.StatusOK, cloneStoreItem(&response))
 	case http.MethodDelete:
 		var req struct {
 			Namespace []string `json:"namespace"`
@@ -1912,7 +2018,8 @@ func (s *Server) handleGlobalStoreSearch(w http.ResponseWriter, r *http.Request)
 	out := make([]StoreItem, 0, len(items))
 	for _, item := range items {
 		copyItem := item
-		out = append(out, serverStoreSearchItemFromGraph(&copyItem))
+		response := serverStoreSearchItemFromGraph(&copyItem)
+		out = append(out, *cloneStoreItem(&response))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
@@ -2535,12 +2642,19 @@ func writeSSEMode(w http.ResponseWriter, event string, payload any) error {
 }
 
 func writeSSEWithID(w http.ResponseWriter, event string, payload any, id int) error {
-	b, err := json.Marshal(payload)
-	if err != nil {
+	if evt, ok := payload.(RunEvent); ok {
+		if evt.Type == "" {
+			evt.Type = event
+		}
+		if _, err := fmt.Fprintf(w, "id: %d\n", id); err != nil {
+			return err
+		}
+		return writeSSE(w, evt)
+	}
+	if _, err := fmt.Fprintf(w, "id: %d\n", id); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", id, event, b)
-	return err
+	return writeSSEMode(w, event, payload)
 }
 
 func parseLastEventID(raw string) int {

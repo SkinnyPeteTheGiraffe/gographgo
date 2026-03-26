@@ -85,6 +85,40 @@ func TestInMemorySaver_GetLatestCheckpoint(t *testing.T) {
 	}
 }
 
+func TestInMemorySaver_GetLatestCheckpoint_IsNamespaceScoped(t *testing.T) {
+	ctx := context.Background()
+	s := checkpoint.NewInMemorySaver()
+
+	_, err := s.Put(ctx, &checkpoint.Config{ThreadID: "thread-ns", CheckpointNS: ""}, mkCP("cp-001", map[string]any{"scope": "root"}), mkMeta("loop", 0))
+	if err != nil {
+		t.Fatalf("Put root cp-001: %v", err)
+	}
+	_, err = s.Put(ctx, &checkpoint.Config{ThreadID: "thread-ns", CheckpointNS: "child"}, mkCP("cp-100", map[string]any{"scope": "child"}), mkMeta("loop", 0))
+	if err != nil {
+		t.Fatalf("Put child cp-100: %v", err)
+	}
+	_, err = s.Put(ctx, &checkpoint.Config{ThreadID: "thread-ns", CheckpointNS: ""}, mkCP("cp-002", map[string]any{"scope": "root-latest"}), mkMeta("loop", 1))
+	if err != nil {
+		t.Fatalf("Put root cp-002: %v", err)
+	}
+
+	gotRoot, err := s.GetTuple(ctx, &checkpoint.Config{ThreadID: "thread-ns", CheckpointNS: ""})
+	if err != nil {
+		t.Fatalf("GetTuple root: %v", err)
+	}
+	if gotRoot == nil || gotRoot.Checkpoint.ID != "cp-002" {
+		t.Fatalf("root latest checkpoint = %#v, want cp-002", gotRoot)
+	}
+
+	gotChild, err := s.GetTuple(ctx, &checkpoint.Config{ThreadID: "thread-ns", CheckpointNS: "child"})
+	if err != nil {
+		t.Fatalf("GetTuple child: %v", err)
+	}
+	if gotChild == nil || gotChild.Checkpoint.ID != "cp-100" {
+		t.Fatalf("child latest checkpoint = %#v, want cp-100", gotChild)
+	}
+}
+
 func TestInMemorySaver_GetSpecificCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	s := checkpoint.NewInMemorySaver()

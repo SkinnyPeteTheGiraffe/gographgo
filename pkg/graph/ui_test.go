@@ -41,7 +41,7 @@ func TestUIMessageReducer_MergesAndDeletes(t *testing.T) {
 
 func TestPushAndDeleteUIMessage_StreamAndState(t *testing.T) {
 	g := NewUIStateGraph()
-	g.AddNode("show", func(ctx context.Context, state UIState) (NodeResult, error) {
+	g.AddNode("show", func(ctx context.Context, _ UIState) (NodeResult, error) {
 		message, cmd := PushUIMessage(ctx, "banner", map[string]any{"text": "hello"}, UIPushOptions{MessageID: "msg-1", Merge: true})
 		if message.Type != UIMessageType {
 			t.Fatalf("message type = %q, want %q", message.Type, UIMessageType)

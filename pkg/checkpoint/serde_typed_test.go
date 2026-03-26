@@ -56,8 +56,8 @@ func TestDeserializeFromStorage_LegacyBase64Fallback(t *testing.T) {
 	}
 }
 
-func TestJsonPlusSerializer_TimeAndUUID(t *testing.T) {
-	ser := NewJsonPlusSerializer()
+func TestJSONPlusSerializer_TimeAndUUID(t *testing.T) {
+	ser := NewJSONPlusSerializer()
 
 	now := time.Date(2026, 3, 24, 1, 2, 3, 456789000, time.UTC)
 	encodedTime, err := ser.Serialize(now)
@@ -94,11 +94,11 @@ func TestJsonPlusSerializer_TimeAndUUID(t *testing.T) {
 	}
 }
 
-func TestJsonPlusSerializer_WithMsgpackAllowlist(t *testing.T) {
+func TestJSONPlusSerializer_WithMsgpackAllowlist(t *testing.T) {
 	type disallowed struct{ X int }
 	type allowed struct{ Name string }
 
-	base := NewJsonPlusSerializer(WithAllowlist(allowed{}))
+	base := NewJSONPlusSerializer(WithAllowlist(allowed{}))
 	if _, _, err := base.DumpsTyped(allowed{Name: "ok"}); err != nil {
 		t.Fatalf("allowed dumps: %v", err)
 	}
@@ -132,7 +132,7 @@ func (passthroughCipher) Decrypt(cipherName string, ciphertext []byte) ([]byte, 
 }
 
 func TestEncryptedSerializer_RoundTripAndUnencryptedFallback(t *testing.T) {
-	inner := NewJsonPlusSerializer()
+	inner := NewJSONPlusSerializer()
 	enc := NewEncryptedSerializer(passthroughCipher{}, inner)
 
 	obj := map[string]any{"k": "v", "n": 1}

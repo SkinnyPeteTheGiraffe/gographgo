@@ -8,20 +8,20 @@ import (
 	"github.com/google/uuid"
 )
 
-// JsonPlusSerializer is a Go-native approximation of LangGraph's
-// JsonPlus serializer. It uses typed envelopes and MessagePack for general
+// JSONPlusSerializer is a Go-native approximation of LangGraph's
+// JSONPlus serializer. It uses typed envelopes and MessagePack for general
 // payloads while providing explicit handling for time and UUID values.
-type JsonPlusSerializer struct {
+type JSONPlusSerializer struct {
 	msgpack *MsgpackSerializer
 }
 
-// NewJsonPlusSerializer creates a JsonPlusSerializer.
-func NewJsonPlusSerializer(opts ...MsgpackOption) *JsonPlusSerializer {
-	return &JsonPlusSerializer{msgpack: NewMsgpackSerializer(opts...)}
+// NewJSONPlusSerializer creates a JSONPlusSerializer.
+func NewJSONPlusSerializer(opts ...MsgpackOption) *JSONPlusSerializer {
+	return &JSONPlusSerializer{msgpack: NewMsgpackSerializer(opts...)}
 }
 
 // Serialize serializes value into a storage-friendly payload.
-func (s *JsonPlusSerializer) Serialize(value any) (any, error) {
+func (s *JSONPlusSerializer) Serialize(value any) (any, error) {
 	typeName, payload, err := s.DumpsTyped(value)
 	if err != nil {
 		return nil, err
@@ -30,21 +30,21 @@ func (s *JsonPlusSerializer) Serialize(value any) (any, error) {
 }
 
 // Deserialize deserializes a storage payload into a Go value.
-func (s *JsonPlusSerializer) Deserialize(value any) (any, error) {
+func (s *JSONPlusSerializer) Deserialize(value any) (any, error) {
 	env, ok, err := decodeSerializedEnvelope(value)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("checkpoint.JsonPlusSerializer: expected serialized envelope, got %T", value)
+		return nil, fmt.Errorf("checkpoint.JSONPlusSerializer: expected serialized envelope, got %T", value)
 	}
 	return s.LoadsTyped(env.Type, env.Data)
 }
 
 // DumpsTyped serializes value into a `(type, bytes)` tuple.
-func (s *JsonPlusSerializer) DumpsTyped(value any) (string, []byte, error) {
+func (s *JSONPlusSerializer) DumpsTyped(value any) (string, []byte, error) {
 	if s == nil {
-		s = NewJsonPlusSerializer()
+		s = NewJSONPlusSerializer()
 	}
 	switch v := value.(type) {
 	case nil:
@@ -61,9 +61,9 @@ func (s *JsonPlusSerializer) DumpsTyped(value any) (string, []byte, error) {
 }
 
 // LoadsTyped deserializes a `(type, bytes)` tuple.
-func (s *JsonPlusSerializer) LoadsTyped(typeName string, payload []byte) (any, error) {
+func (s *JSONPlusSerializer) LoadsTyped(typeName string, payload []byte) (any, error) {
 	if s == nil {
-		s = NewJsonPlusSerializer()
+		s = NewJSONPlusSerializer()
 	}
 	switch typeName {
 	case "null":
@@ -85,9 +85,9 @@ func (s *JsonPlusSerializer) LoadsTyped(typeName string, payload []byte) (any, e
 
 // WithMsgpackAllowlist returns a cloned serializer with an updated msgpack
 // allowlist, mirroring LangGraph's `with_msgpack_allowlist` behavior.
-func (s *JsonPlusSerializer) WithMsgpackAllowlist(extraAllowlist ...any) *JsonPlusSerializer {
+func (s *JSONPlusSerializer) WithMsgpackAllowlist(extraAllowlist ...any) *JSONPlusSerializer {
 	if s == nil {
-		s = NewJsonPlusSerializer()
+		s = NewJSONPlusSerializer()
 	}
 	if len(extraAllowlist) == 0 {
 		return s

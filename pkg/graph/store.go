@@ -92,25 +92,13 @@ func (s *InMemoryStore) Batch(ctx context.Context, ops []StoreOp) ([]any, error)
 			}
 			results[i] = nil
 		case StoreSearchOp:
-			items, err := s.SearchItems(ctx, StoreSearchRequest{
-				NamespacePrefix: typed.NamespacePrefix,
-				Filter:          typed.Filter,
-				Query:           typed.Query,
-				Limit:           typed.Limit,
-				Offset:          typed.Offset,
-				RefreshTTL:      typed.RefreshTTL,
-			})
+			items, err := s.SearchItems(ctx, StoreSearchRequest(typed))
 			if err != nil {
 				return nil, err
 			}
 			results[i] = items
 		case StoreListNamespacesOp:
-			namespaces, err := s.ListNamespaces(ctx, StoreNamespaceListRequest{
-				MatchConditions: typed.MatchConditions,
-				MaxDepth:        typed.MaxDepth,
-				Limit:           typed.Limit,
-				Offset:          typed.Offset,
-			})
+			namespaces, err := s.ListNamespaces(ctx, StoreNamespaceListRequest(typed))
 			if err != nil {
 				return nil, err
 			}
@@ -320,15 +308,14 @@ func (s *InMemoryStore) SearchItems(ctx context.Context, req StoreSearchRequest)
 			}
 			score := (*float64)(nil)
 			if queryText != "" {
-				if len(entry.embedding) > 0 && len(queryEmbedding) > 0 {
-					value := cosineSimilaritySparseVectors(entry.embedding, queryEmbedding)
-					if value <= 0 {
-						continue
-					}
-					score = ptrFloat64(value)
-				} else {
+				if len(entry.embedding) == 0 || len(queryEmbedding) == 0 {
 					continue
 				}
+				value := cosineSimilaritySparseVectors(entry.embedding, queryEmbedding)
+				if value <= 0 {
+					continue
+				}
+				score = ptrFloat64(value)
 			} else if !matchesStoreQuery(req.Query, key, entry.value) {
 				continue
 			}

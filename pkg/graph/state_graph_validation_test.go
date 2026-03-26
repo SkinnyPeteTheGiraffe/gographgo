@@ -8,7 +8,7 @@ import (
 
 func TestStateGraph_AddNodeRejectsReservedAndInvalidNames(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	nodeFn := func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	nodeFn := func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	}
 
@@ -38,7 +38,7 @@ func TestStateGraph_AddManagedValueRejectsReservedNames(t *testing.T) {
 
 func TestStateGraph_AddConditionalEdgesValidatesPathAndDuplicateNames(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("router", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("router", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 
@@ -46,7 +46,7 @@ func TestStateGraph_AddConditionalEdgesValidatesPathAndDuplicateNames(t *testing
 		g.AddConditionalEdges("router", nil, nil)
 	})
 
-	routeLeft := func(ctx context.Context, state map[string]any) (Route, error) {
+	routeLeft := func(_ context.Context, _ map[string]any) (Route, error) {
 		return RouteTo("left"), nil
 	}
 	g.AddConditionalEdges("router", routeLeft, map[string]string{"left": "left"})
@@ -57,7 +57,7 @@ func TestStateGraph_AddConditionalEdgesValidatesPathAndDuplicateNames(t *testing
 
 func TestStateGraph_ValidateAllowsAllInterruptSentinel(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("n", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(START, "n")
@@ -68,9 +68,57 @@ func TestStateGraph_ValidateAllowsAllInterruptSentinel(t *testing.T) {
 	}
 }
 
+func TestStateGraph_CompileUsesBuilderInterruptDefaults(t *testing.T) {
+	g := NewStateGraph[map[string]any]()
+	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		return NoNodeResult(), nil
+	})
+	g.AddEdge(START, "n")
+	g.AddEdge("n", END)
+	g.SetInterruptBefore("n")
+	g.SetInterruptAfter("n")
+
+	compiled, err := g.Compile()
+	if err != nil {
+		t.Fatalf("compile with builder interrupt defaults: %v", err)
+	}
+	if len(compiled.interruptBefore) != 1 || compiled.interruptBefore[0] != "n" {
+		t.Fatalf("compiled interrupt before = %#v, want [n]", compiled.interruptBefore)
+	}
+	if len(compiled.interruptAfter) != 1 || compiled.interruptAfter[0] != "n" {
+		t.Fatalf("compiled interrupt after = %#v, want [n]", compiled.interruptAfter)
+	}
+}
+
+func TestStateGraph_CompileOptionInterruptsOverrideBuilderDefaults(t *testing.T) {
+	g := NewStateGraph[map[string]any]()
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		return NoNodeResult(), nil
+	})
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		return NoNodeResult(), nil
+	})
+	g.AddEdge(START, "a")
+	g.AddEdge("a", "b")
+	g.AddEdge("b", END)
+	g.SetInterruptBefore("a")
+	g.SetInterruptAfter("a")
+
+	compiled, err := g.Compile(CompileOptions{InterruptBefore: []string{"b"}, InterruptAfter: []string{}})
+	if err != nil {
+		t.Fatalf("compile with interrupt overrides: %v", err)
+	}
+	if len(compiled.interruptBefore) != 1 || compiled.interruptBefore[0] != "b" {
+		t.Fatalf("compiled interrupt before = %#v, want [b]", compiled.interruptBefore)
+	}
+	if len(compiled.interruptAfter) != 0 {
+		t.Fatalf("compiled interrupt after = %#v, want empty", compiled.interruptAfter)
+	}
+}
+
 func TestStateGraph_ValidateRejectsReservedChannelIdentifiers(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("n", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(START, "n")
@@ -84,7 +132,7 @@ func TestStateGraph_ValidateRejectsReservedChannelIdentifiers(t *testing.T) {
 
 func TestStateGraph_ValidateRejectsUnknownDeclaredDestinations(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("n", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("n", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(START, "n")

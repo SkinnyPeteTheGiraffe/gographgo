@@ -168,6 +168,39 @@ func Test_BulkUpdateState(t *testing.T) {
 	}
 }
 
+func TestMergeState_MapShallowMergeCopiesInput(t *testing.T) {
+	current := map[string]any{"a": 1, "nested": map[string]any{"x": 1}}
+	update := map[string]any{"b": 2, "a": 3}
+
+	merged := mergeState(current, update)
+	if merged["a"] != 3 {
+		t.Fatalf("merged[a] = %v, want 3", merged["a"])
+	}
+	if merged["b"] != 2 {
+		t.Fatalf("merged[b] = %v, want 2", merged["b"])
+	}
+	if current["a"] != 1 {
+		t.Fatalf("current[a] mutated to %v, want 1", current["a"])
+	}
+}
+
+func TestMergeState_TypedStateReplacement(t *testing.T) {
+	type simpleState struct {
+		Count int
+	}
+
+	current := simpleState{Count: 1}
+	updated := mergeState(current, simpleState{Count: 4})
+	if updated.Count != 4 {
+		t.Fatalf("updated.Count = %d, want 4", updated.Count)
+	}
+
+	notReplaced := mergeState(current, map[string]any{"Count": 9})
+	if notReplaced.Count != 1 {
+		t.Fatalf("notReplaced.Count = %d, want 1", notReplaced.Count)
+	}
+}
+
 func Test_GetStateHistory(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 

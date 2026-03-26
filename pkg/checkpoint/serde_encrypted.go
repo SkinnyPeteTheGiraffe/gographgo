@@ -26,7 +26,7 @@ type EncryptedSerializer struct {
 // NewEncryptedSerializer constructs an encrypted serializer.
 func NewEncryptedSerializer(c Cipher, serde Serializer) *EncryptedSerializer {
 	if serde == nil {
-		serde = NewJsonPlusSerializer()
+		serde = NewJSONPlusSerializer()
 	}
 	return &EncryptedSerializer{Cipher: c, Serde: serde}
 }
@@ -95,7 +95,7 @@ func (s *EncryptedSerializer) innerSerializer() Serializer {
 	if s != nil && s.Serde != nil {
 		return s.Serde
 	}
-	return NewJsonPlusSerializer()
+	return NewJSONPlusSerializer()
 }
 
 // AESGCMCipher implements AES-GCM authenticated encryption.

@@ -770,7 +770,7 @@ func (a *ReactAgent) invokeCoreFrom(
 		if err := ctx.Err(); err != nil {
 			return invokeCoreResult{}, err
 		}
-		if !(skipBeforeAgent && step == 0) && a.shouldInterruptBefore(agentNodeName) {
+		if (!skipBeforeAgent || step != 0) && a.shouldInterruptBefore(agentNodeName) {
 			return invokeCoreResult{
 				state: current,
 				interrupts: []graph.Interrupt{

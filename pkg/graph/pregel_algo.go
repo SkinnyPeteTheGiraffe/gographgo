@@ -335,20 +335,7 @@ func containsString(items []string, target string) bool {
 // with their Arg passed as the node input. This separation mirrors Python
 // LangGraph's PUSH vs PULL task distinction in prepare_next_tasks.
 func routingTargetsBoth(route Route, pathMap map[string]string) ([]string, []Send, error) {
-	strs := make([]string, 0, len(route.Nodes))
-	for _, node := range route.Nodes {
-		if node == "" || node == END {
-			continue
-		}
-		target := node
-		if mapped, ok := pathMap[node]; ok {
-			target = mapped
-		}
-		if target == "" || target == END {
-			continue
-		}
-		strs = append(strs, target)
-	}
+	strs := routingTargets(route, pathMap)
 
 	sends := make([]Send, 0, len(route.Sends))
 	for _, s := range route.Sends {
@@ -364,7 +351,20 @@ func routingTargetsBoth(route Route, pathMap map[string]string) ([]string, []Sen
 // routingTargets extracts only the string node names from a branch result.
 // Kept for callers that do not need Send objects.
 func routingTargets(route Route, pathMap map[string]string) []string {
-	strs, _, _ := routingTargetsBoth(route, pathMap)
+	strs := make([]string, 0, len(route.Nodes))
+	for _, node := range route.Nodes {
+		if node == "" || node == END {
+			continue
+		}
+		target := node
+		if mapped, ok := pathMap[node]; ok {
+			target = mapped
+		}
+		if target == "" || target == END {
+			continue
+		}
+		strs = append(strs, target)
+	}
 	return strs
 }
 
@@ -431,8 +431,7 @@ func applyTaskWrites[State, Context, Input, Output any](
 
 	bumpStep := false
 	consumed := make(map[string]struct{})
-	channelWrites := make(map[string][]Dynamic)
-	channelOrder := make([]string, 0)
+	explicitWrites := make([]pregelWrite, 0)
 	written := make(map[string]bool)
 
 	for _, result := range orderedResults {
@@ -471,10 +470,7 @@ func applyTaskWrites[State, Context, Input, Output any](
 				}
 				channels.channels[write.channel] = NewLastValue()
 			}
-			if _, seen := channelWrites[write.channel]; !seen {
-				channelOrder = append(channelOrder, write.channel)
-			}
-			channelWrites[write.channel] = append(channelWrites[write.channel], Dyn(write.value))
+			explicitWrites = append(explicitWrites, write)
 			written[write.channel] = true
 		}
 
@@ -492,10 +488,7 @@ func applyTaskWrites[State, Context, Input, Output any](
 				if _, exists := channels.channels[joinChannel]; !exists {
 					continue
 				}
-				if _, seen := channelWrites[joinChannel]; !seen {
-					channelOrder = append(channelOrder, joinChannel)
-				}
-				channelWrites[joinChannel] = append(channelWrites[joinChannel], Dyn(result.node))
+				explicitWrites = append(explicitWrites, pregelWrite{channel: joinChannel, value: result.node})
 				written[joinChannel] = true
 			}
 		}
@@ -506,23 +499,18 @@ func applyTaskWrites[State, Context, Input, Output any](
 		consumeOrder = append(consumeOrder, channel)
 	}
 	sort.Strings(consumeOrder)
-	for _, channel := range consumeOrder {
-		if channels.channels[channel].Consume() {
-			versionBumped[channel] = true
-		}
+	for channel := range channels.consumeChannels(consumeOrder) {
+		versionBumped[channel] = true
 	}
 
-	for _, channel := range channelOrder {
-		ch := channels.channels[channel]
-		changed, err := ch.Update(channelWrites[channel])
-		if err != nil {
-			return interrupts, versionBumped, updatedChannels, err
-		}
-		if changed {
-			versionBumped[channel] = true
-			if ch.IsAvailable() {
-				updatedChannels[channel] = true
-			}
+	changed, err := channels.applyBatch(explicitWrites)
+	if err != nil {
+		return interrupts, versionBumped, updatedChannels, err
+	}
+	for channel := range changed {
+		versionBumped[channel] = true
+		if channels.channels[channel].IsAvailable() {
+			updatedChannels[channel] = true
 		}
 	}
 
