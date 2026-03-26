@@ -10,7 +10,7 @@ import (
 // For any other type the whole value is written under the __input__ key.
 //
 // Mirrors Python LangGraph's pregel/_io.py:map_input.
-func MapInput(input any, schema map[string]graph.Channel) map[string][]any {
+func MapInput(input any, _ map[string]graph.Channel) map[string][]any {
 	writes := make(map[string][]any)
 
 	if inputMap, ok := input.(map[string]any); ok {

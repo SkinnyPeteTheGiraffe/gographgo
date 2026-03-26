@@ -82,10 +82,10 @@ func (introspectionRunner) GraphInfo(_ context.Context, graphID string) (graphpk
 	g.SetOutputSchema(struct {
 		Reply string `json:"reply"`
 	}{})
-	g.AddNode("router", func(_ context.Context, state map[string]any) (graphpkg.NodeResult, error) {
+	g.AddNode("router", func(_ context.Context, _ map[string]any) (graphpkg.NodeResult, error) {
 		return graphpkg.NoNodeResult(), nil
 	})
-	g.AddNode("worker", func(_ context.Context, state map[string]any) (graphpkg.NodeResult, error) {
+	g.AddNode("worker", func(_ context.Context, _ map[string]any) (graphpkg.NodeResult, error) {
 		return graphpkg.NoNodeResult(), nil
 	})
 	g.AddEdge(graphpkg.Start, "router")
