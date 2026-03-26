@@ -638,13 +638,16 @@ func TestReactAgent_V2FanoutExecutesEachToolCallOnce(t *testing.T) {
 		{Content: "done"},
 	}}
 
+	var execMu sync.Mutex
 	execCounts := map[string]int{}
 	agent := prebuilt.CreateReactAgent(
 		model,
 		[]prebuilt.Tool{
 			prebuilt.NewToolFunc("counter", func(_ context.Context, args map[string]any) (any, error) {
 				label, _ := args["label"].(string)
+				execMu.Lock()
 				execCounts[label]++
+				execMu.Unlock()
 				return "ok:" + label, nil
 			}),
 		},
@@ -675,13 +678,16 @@ func TestReactAgent_V2InterruptResumeExecutesOnlyUnansweredCalls(t *testing.T) {
 		{Content: "done"},
 	}}
 
+	var execMu sync.Mutex
 	execCounts := map[string]int{}
 	agent := prebuilt.CreateReactAgent(
 		model,
 		[]prebuilt.Tool{
 			prebuilt.NewToolFunc("counter", func(_ context.Context, args map[string]any) (any, error) {
 				label, _ := args["label"].(string)
+				execMu.Lock()
 				execCounts[label]++
+				execMu.Unlock()
 				return "ok:" + label, nil
 			}),
 		},

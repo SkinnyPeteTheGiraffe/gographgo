@@ -603,10 +603,6 @@ type executeTaskOptions[State any] struct {
 }
 
 func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pregelTask[State], opts executeTaskOptions[State]) pregelTaskResult {
-	if err := ctx.Err(); err != nil {
-		return pregelTaskResult{taskID: task.id, node: task.name, path: append([]any(nil), task.path...), checkpointNS: task.checkpointNS, err: err}
-	}
-
 	inputState, inputErr := coerceStateInput[State](task.input)
 	if inputErr != nil {
 		return pregelTaskResult{taskID: task.id, node: task.name, path: append([]any(nil), task.path...), checkpointNS: task.checkpointNS, err: fmt.Errorf("invalid task input for node '%s': %w", task.name, inputErr)}

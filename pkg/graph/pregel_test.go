@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1354,18 +1355,27 @@ func TestPregelLoop_EmptyGraphErrors(t *testing.T) {
 // TestPregelLoop_MultipleNodesPerSuperstep verifies that when multiple nodes
 // are triggered from the same source, all run in the same superstep.
 func TestPregelLoop_MultipleNodesPerSuperstep(t *testing.T) {
-	var order []string
+	var (
+		orderMu sync.Mutex
+		order   []string
+	)
 	g := NewStateGraph[map[string]any]()
 	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+		orderMu.Lock()
 		order = append(order, "a")
+		orderMu.Unlock()
 		return NoNodeResult(), nil
 	})
 	g.AddNode("b1", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+		orderMu.Lock()
 		order = append(order, "b1")
+		orderMu.Unlock()
 		return NodeWrites(DynMap(map[string]any{"b1": true})), nil
 	})
 	g.AddNode("b2", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+		orderMu.Lock()
 		order = append(order, "b2")
+		orderMu.Unlock()
 		return NodeWrites(DynMap(map[string]any{"b2": true})), nil
 	})
 
