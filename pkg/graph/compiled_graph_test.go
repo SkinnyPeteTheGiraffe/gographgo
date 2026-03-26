@@ -81,10 +81,10 @@ func (s *countingSaver) checkpointNamespaces() []string {
 func Test_DurabilityModes(t *testing.T) {
 	makeGraph := func() *CompiledStateGraph[map[string]any, any, map[string]any, map[string]any] {
 		g := NewStateGraph[map[string]any]()
-		g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+		g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 			return NodeWrites(map[string]Dynamic{"a": Dyn(1)}), nil
 		})
-		g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+		g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 			return NodeWrites(map[string]Dynamic{"b": Dyn(2)}), nil
 		})
 		g.AddEdge(Start, "a")
@@ -132,7 +132,7 @@ func Test_BulkUpdateState(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("noop", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("noop", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(Start, "noop")
@@ -205,7 +205,7 @@ func Test_GetStateHistory(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("noop", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("noop", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(Start, "noop")
@@ -277,7 +277,7 @@ func Test_GetStateHistory(t *testing.T) {
 
 func Test_GetStateHistory_NoCheckpointer(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("noop", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("noop", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(Start, "noop")
@@ -301,7 +301,7 @@ func Test_GetStateHistory_Empty(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("noop", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("noop", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(Start, "noop")
@@ -325,7 +325,7 @@ func Test_ReplayFromCheckpointIgnoresInput(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("pass", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("pass", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		return NodeState(Dyn(state)), nil
 	})
 	g.AddEdge(Start, "pass")
@@ -370,7 +370,7 @@ func Test_SubgraphNodeNamespaces(t *testing.T) {
 	saver := newCountingSaver(baseSaver)
 
 	childBuilder := NewStateGraph[map[string]any]()
-	childBuilder.AddNode("child_work", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	childBuilder.AddNode("child_work", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(map[string]Dynamic{"child": Dyn("ok")}), nil
 	})
 	childBuilder.AddEdge(Start, "child_work")
@@ -419,7 +419,7 @@ func Test_SubgraphNodeNamespaces_StatefulModeUsesNodeScope(t *testing.T) {
 	saver := newCountingSaver(baseSaver)
 
 	childBuilder := NewStateGraph[map[string]any]()
-	childBuilder.AddNode("child_work", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	childBuilder.AddNode("child_work", func(_ context.Context, state map[string]any) (NodeResult, error) {
 		count := 0
 		switch v := state["sub_count"].(type) {
 		case int:
@@ -440,7 +440,7 @@ func Test_SubgraphNodeNamespaces_StatefulModeUsesNodeScope(t *testing.T) {
 
 	parentBuilder := NewStateGraph[map[string]any]()
 	statefulChild := child.AsStatefulSubgraphNode("child_node")
-	parentBuilder.AddNode("child_node", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	parentBuilder.AddNode("child_node", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
 		return statefulChild(ctx, map[string]any{"seed": true})
 	})
 	parentBuilder.AddEdge(Start, "child_node")
@@ -482,7 +482,7 @@ func Test_SubgraphNodeOptions_DisableCheckpointer(t *testing.T) {
 	saver := newCountingSaver(baseSaver)
 
 	childBuilder := NewStateGraph[map[string]any]()
-	childBuilder.AddNode("child_work", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	childBuilder.AddNode("child_work", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(map[string]Dynamic{"child": Dyn("ok")}), nil
 	})
 	childBuilder.AddEdge(Start, "child_work")
@@ -522,7 +522,7 @@ func TestGetState_FullSnapshot(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("work", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("work", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"done": true})), nil
 	})
 	g.AddEdge(Start, "work")
@@ -588,10 +588,10 @@ func TestGetState_InterruptBefore(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"ran": "a"})), nil
 	})
-	g.AddNode("b", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NodeWrites(DynMap(map[string]any{"ran": "b"})), nil
 	})
 	g.AddEdge(Start, "a")
@@ -663,7 +663,7 @@ func TestGetState_UserInterrupt(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("ask", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("ask", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		iv := NewInterrupt(Dyn("need input"), "ask-interrupt")
 		panic(nodeInterruptSignal{interrupt: iv})
 	})
@@ -710,7 +710,7 @@ func TestGetState_ParentConfig(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("step", func(ctx context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("step", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(Start, "step")

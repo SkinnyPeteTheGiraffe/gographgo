@@ -8,21 +8,21 @@ import (
 
 func TestCompiledStateGraphGetGraph(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("router", func(_ context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("router", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("left", func(_ context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("left", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("right", func(_ context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("right", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("join", func(_ context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("join", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 
 	g.AddEdge(Start, "router")
-	g.AddConditionalEdges("router", func(_ context.Context, state map[string]any) (Route, error) {
+	g.AddConditionalEdges("router", func(_ context.Context, _ map[string]any) (Route, error) {
 		return Route{}, nil
 	}, map[string]string{"l": "left", "r": "right"})
 	g.AddEdges([]string{"left", "right"}, "join")
@@ -83,14 +83,14 @@ func TestCompiledStateGraphGetGraph(t *testing.T) {
 
 func TestGraphInfoMermaid(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
-	g.AddNode("a", func(_ context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("a", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
-	g.AddNode("b", func(_ context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("b", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(Start, "a")
-	g.AddConditionalEdges("a", func(_ context.Context, state map[string]any) (Route, error) {
+	g.AddConditionalEdges("a", func(_ context.Context, _ map[string]any) (Route, error) {
 		return Route{}, nil
 	}, map[string]string{"go": "b"})
 	g.AddEdge("b", End)
@@ -126,7 +126,7 @@ func TestGraphInfoSchemasAndSubgraphs(t *testing.T) {
 	g.SetContextSchema(struct {
 		Tenant string `json:"tenant"`
 	}{})
-	g.AddNode("router", func(_ context.Context, state map[string]any) (NodeResult, error) {
+	g.AddNode("router", func(_ context.Context, _ map[string]any) (NodeResult, error) {
 		return NoNodeResult(), nil
 	})
 	g.AddEdge(Start, "router")

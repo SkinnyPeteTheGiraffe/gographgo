@@ -8,7 +8,7 @@ import (
 
 func TestNewMessageGraph_EquivalentToManualMessagesGraph(t *testing.T) {
 	buildFlow := func(g *StateGraph[MessagesState, any, MessagesState, MessagesState]) {
-		g.AddNode("append", func(_ context.Context, state MessagesState) (NodeResult, error) {
+		g.AddNode("append", func(_ context.Context, _ MessagesState) (NodeResult, error) {
 			return NodeWrites(DynMap(map[string]any{
 				"Messages": []Message{{ID: "1", Role: "assistant", Content: "hello"}},
 			})), nil

@@ -14,7 +14,7 @@ func ExampleStateGraph() {
 	builder := graph.NewStateGraph[map[string]any]()
 
 	// Add nodes
-	builder.AddNode("init", func(_ context.Context, state map[string]any) (graph.NodeResult, error) {
+	builder.AddNode("init", func(_ context.Context, _ map[string]any) (graph.NodeResult, error) {
 		return graph.NodeWrites(graph.DynMap(map[string]any{"count": 0})), nil
 	})
 

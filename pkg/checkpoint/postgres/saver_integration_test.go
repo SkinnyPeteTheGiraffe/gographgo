@@ -60,7 +60,7 @@ func TestMain(m *testing.M) {
 }
 
 func freeTCPPort() (int, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
 	}
@@ -157,11 +157,12 @@ func TestSaver_PutGetTuple_EmbeddedPostgres(t *testing.T) {
 }
 
 func TestSaver_PostgresSchemaParity_EmbeddedPostgres(t *testing.T) {
+	ctx := context.Background()
 	_ = newSaver(t)
 	db := newDB(t)
 
 	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM checkpoint_migrations`).Scan(&count); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM checkpoint_migrations`).Scan(&count); err != nil {
 		t.Fatalf("query checkpoint_migrations: %v", err)
 	}
 	if count == 0 {
@@ -171,7 +172,7 @@ func TestSaver_PostgresSchemaParity_EmbeddedPostgres(t *testing.T) {
 	assertColumn := func(table, column, dataType string) {
 		t.Helper()
 		var gotType string
-		err := db.QueryRow(`
+		err := db.QueryRowContext(ctx, `
 SELECT data_type
 FROM information_schema.columns
 WHERE table_name = $1 AND column_name = $2`, table, column).Scan(&gotType)
@@ -211,7 +212,7 @@ func TestSaver_Put_StoresBlobChannels_EmbeddedPostgres(t *testing.T) {
 	}
 
 	var rawJSON string
-	if err := db.QueryRow(`
+	if err := db.QueryRowContext(ctx, `
 SELECT checkpoint::text
 FROM checkpoints
 WHERE thread_id = $1 AND checkpoint_ns = $2 AND checkpoint_id = $3`, threadID, "", stored.CheckpointID).Scan(&rawJSON); err != nil {
@@ -222,7 +223,7 @@ WHERE thread_id = $1 AND checkpoint_ns = $2 AND checkpoint_id = $3`, threadID, "
 	}
 
 	var blobRows int
-	if err := db.QueryRow(`
+	if err := db.QueryRowContext(ctx, `
 SELECT COUNT(*)
 FROM checkpoint_blobs
 WHERE thread_id = $1 AND checkpoint_ns = $2 AND channel = 'payload'`, threadID, "").Scan(&blobRows); err != nil {
@@ -264,7 +265,7 @@ func TestSaver_PutWrites_StoresTaskPathAndType_EmbeddedPostgres(t *testing.T) {
 
 	var taskPath string
 	var typeName sql.NullString
-	if err := db.QueryRow(`
+	if err := db.QueryRowContext(ctx, `
 SELECT task_path, type
 FROM checkpoint_writes
 WHERE thread_id = $1 AND checkpoint_ns = $2 AND checkpoint_id = $3 AND task_id = $4`, threadID, "", stored.CheckpointID, "task-1").Scan(&taskPath, &typeName); err != nil {
@@ -465,7 +466,7 @@ func TestSaver_LegacyCheckpointJSONBlobReferenceSurvivesPrune_EmbeddedPostgres(t
 		t.Fatalf("Put: %v", err)
 	}
 
-	if err := rewriteCheckpointJSONToCamelCase(db, threadID, "", stored.CheckpointID); err != nil {
+	if err := rewriteCheckpointJSONToCamelCase(ctx, db, threadID, "", stored.CheckpointID); err != nil {
 		t.Fatalf("rewrite checkpoint JSON to CamelCase: %v", err)
 	}
 
@@ -511,7 +512,7 @@ func TestSaver_LegacyPendingSendsMigrationFromParentWrites_EmbeddedPostgres(t *t
 		t.Fatalf("Put cp-002: %v", err)
 	}
 
-	if _, err := db.Exec(`
+	if _, err := db.ExecContext(ctx, `
 UPDATE checkpoints
 SET checkpoint = checkpoint - 'pending_sends'
 WHERE thread_id = $1 AND checkpoint_ns = $2 AND checkpoint_id = $3`, threadID, "", cfg.CheckpointID); err != nil {
@@ -541,9 +542,9 @@ WHERE thread_id = $1 AND checkpoint_ns = $2 AND checkpoint_id = $3`, threadID, "
 	}
 }
 
-func rewriteCheckpointJSONToCamelCase(db *sql.DB, threadID, checkpointNS, checkpointID string) error {
+func rewriteCheckpointJSONToCamelCase(ctx context.Context, db *sql.DB, threadID, checkpointNS, checkpointID string) error {
 	var raw string
-	if err := db.QueryRow(`
+	if err := db.QueryRowContext(ctx, `
 SELECT checkpoint::text
 FROM checkpoints
 WHERE thread_id = $1 AND checkpoint_ns = $2 AND checkpoint_id = $3`, threadID, checkpointNS, checkpointID).Scan(&raw); err != nil {
@@ -570,7 +571,7 @@ WHERE thread_id = $1 AND checkpoint_ns = $2 AND checkpoint_id = $3`, threadID, c
 		return err
 	}
 
-	_, err = db.Exec(`
+	_, err = db.ExecContext(ctx, `
 UPDATE checkpoints
 SET checkpoint = $1::jsonb
 WHERE thread_id = $2 AND checkpoint_ns = $3 AND checkpoint_id = $4`, string(payload), threadID, checkpointNS, checkpointID)

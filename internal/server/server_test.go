@@ -154,8 +154,9 @@ func TestServer_ThreadStoreNamespaces(t *testing.T) {
 }
 
 func postJSON[T any](t *testing.T, url, body string, wantStatus int) T {
+	ctx := context.Background()
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -176,8 +177,9 @@ func postJSON[T any](t *testing.T, url, body string, wantStatus int) T {
 }
 
 func putJSONNoResp(t *testing.T, url, body string, wantStatus int) {
+	ctx := context.Background()
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPut, url, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -194,7 +196,11 @@ func putJSONNoResp(t *testing.T, url, body string, wantStatus int) {
 
 func getJSON[T any](t *testing.T, url string, wantStatus int) T {
 	t.Helper()
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
