@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 const maxSSEReconnectAttempts = 5
@@ -66,8 +67,30 @@ func (c *Client) streamSSELoop(
 			errs <- err
 			return
 		}
-		sawEnd, scanErr, ok := consumeSSEBody(ctx, resp.Body, &state.lastEventID, parts)
-		_ = resp.Body.Close()
+		var (
+			sawEnd  bool
+			scanErr error
+			ok      bool
+		)
+		func() {
+			closeOnCancel := make(chan struct{})
+			var closeOnce sync.Once
+			closeBody := func() {
+				closeOnce.Do(func() {
+					_ = resp.Body.Close()
+				})
+			}
+			defer close(closeOnCancel)
+			defer closeBody()
+			go func() {
+				select {
+				case <-ctx.Done():
+					closeBody()
+				case <-closeOnCancel:
+				}
+			}()
+			sawEnd, scanErr, ok = consumeSSEBody(ctx, resp.Body, &state.lastEventID, parts)
+		}()
 		if shouldStopSSELoop(ctx, ok, sawEnd, scanErr, reconnectPath, state.reconnectAttempts, errs) {
 			return
 		}
@@ -78,20 +101,8 @@ func (c *Client) streamSSELoop(
 	}
 }
 
-func consumeSSEBody(ctx context.Context, body io.ReadCloser, lastEventID *string, parts chan<- StreamPart) (sawEnd bool, scanErr error, ok bool) {
-	closeOnCancel := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = body.Close()
-		case <-closeOnCancel:
-		}
-	}()
-
-	sawEnd, scanErr, ok = consumeSSEStream(ctx, body, lastEventID, parts)
-	close(closeOnCancel)
-	_ = body.Close()
-	return sawEnd, scanErr, ok
+func consumeSSEBody(ctx context.Context, body io.Reader, lastEventID *string, parts chan<- StreamPart) (sawEnd bool, scanErr error, ok bool) {
+	return consumeSSEStream(ctx, body, lastEventID, parts)
 }
 
 func shouldStopSSELoop(
