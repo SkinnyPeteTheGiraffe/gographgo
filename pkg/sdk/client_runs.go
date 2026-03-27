@@ -29,38 +29,84 @@ func (rc *RunsClient) Get(ctx context.Context, threadID, runID string) (*Run, er
 }
 
 // Events streams persisted run events.
-func (rc *RunsClient) Events(ctx context.Context, threadID, runID string) (events <-chan RunEvent, errs <-chan error) {
-	parts, errs := rc.client.streamSSE(ctx, http.MethodGet, "/v1/threads/"+threadID+"/runs/"+runID+"/events", nil, nil)
+func (rc *RunsClient) Events(ctx context.Context, threadID, runID string) (events <-chan RunEvent, errCh <-chan error) {
+	rawParts, rawErrs := rc.client.streamSSE(ctx, http.MethodGet, "/v1/threads/"+threadID+"/runs/"+runID+"/events", nil, nil)
 	out := make(chan RunEvent, 32)
 	outErrs := make(chan error, 1)
 
 	go func() {
 		defer close(out)
 		defer close(outErrs)
-		for part := range parts {
-			var evt RunEvent
-			if err := json.Unmarshal(part.Data, &evt); err != nil {
-				outErrs <- err
-				return
-			}
-			if evt.Type == "" {
-				evt.Type = part.Event
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case out <- evt:
-			}
+		if err := streamRunEventParts(ctx, rawParts, out); err != nil {
+			outErrs <- err
+			return
 		}
-		for err := range errs {
+		streamRunEventErrors(ctx, rawErrs, outErrs)
+	}()
+
+	return out, outErrs
+}
+
+func streamRunEventParts(ctx context.Context, rawParts <-chan StreamPart, out chan<- RunEvent) error {
+	for {
+		part, ok := receiveStreamPart(ctx, rawParts)
+		if !ok {
+			return nil
+		}
+		evt, err := decodeRunEvent(part)
+		if err != nil {
+			return err
+		}
+		if !sendRunEvent(ctx, out, evt) {
+			return nil
+		}
+	}
+}
+
+func streamRunEventErrors(ctx context.Context, rawErrs <-chan error, outErrs chan<- error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case err, ok := <-rawErrs:
+			if !ok {
+				return
+			}
 			if err != nil {
 				outErrs <- err
 				return
 			}
 		}
-	}()
+	}
+}
 
-	return out, outErrs
+func receiveStreamPart(ctx context.Context, rawParts <-chan StreamPart) (StreamPart, bool) {
+	select {
+	case <-ctx.Done():
+		return StreamPart{}, false
+	case part, ok := <-rawParts:
+		return part, ok
+	}
+}
+
+func decodeRunEvent(part StreamPart) (RunEvent, error) {
+	var evt RunEvent
+	if err := json.Unmarshal(part.Data, &evt); err != nil {
+		return RunEvent{}, err
+	}
+	if evt.Type == "" {
+		evt.Type = part.Event
+	}
+	return evt, nil
+}
+
+func sendRunEvent(ctx context.Context, out chan<- RunEvent, evt RunEvent) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case out <- evt:
+		return true
+	}
 }
 
 // Stream creates a run and streams stream-mode parts.

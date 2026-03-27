@@ -40,6 +40,67 @@ func TestValidationNode_Validate(t *testing.T) {
 	}
 }
 
+func TestValidationNode_Validate_NoValidator(t *testing.T) {
+	node := prebuilt.NewValidationNode(nil, nil)
+
+	got, err := node.Validate(context.Background(), []prebuilt.ToolCall{{
+		ID:   "missing",
+		Name: "unknown",
+		Args: map[string]any{"x": 1},
+	}})
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Status != "error" {
+		t.Fatalf("status = %q, want error", got[0].Status)
+	}
+	if !strings.Contains(got[0].Content, `No validator registered for tool "unknown"`) {
+		t.Fatalf("content = %q, want missing-validator message", got[0].Content)
+	}
+}
+
+func TestValidationNode_Validate_ContextCanceled(t *testing.T) {
+	node := prebuilt.NewValidationNode(map[string]prebuilt.ToolArgsValidator{
+		"sum": func(_ map[string]any) error { return nil },
+	}, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := node.Validate(ctx, []prebuilt.ToolCall{{
+		ID:   "1",
+		Name: "sum",
+		Args: map[string]any{"a": 1},
+	}})
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	if err != context.Canceled {
+		t.Fatalf("err = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestValidationNode_Validate_MarshalError(t *testing.T) {
+	node := prebuilt.NewValidationNode(map[string]prebuilt.ToolArgsValidator{
+		"sum": func(_ map[string]any) error { return nil },
+	}, nil)
+
+	_, err := node.Validate(context.Background(), []prebuilt.ToolCall{{
+		ID:   "1",
+		Name: "sum",
+		Args: map[string]any{"bad": func() {}},
+	}})
+	if err == nil {
+		t.Fatal("expected json marshal error")
+	}
+	if !strings.Contains(err.Error(), "unsupported type") {
+		t.Fatalf("err = %v, want unsupported type", err)
+	}
+}
+
 func TestValidationNodeFromSchemas_StructAndProviderSources(t *testing.T) {
 	node, err := prebuilt.NewValidationNodeFromSchemas([]any{
 		prebuilt.ValidationSchemaSpec{Name: "sum", Schema: sumSchema{}},
