@@ -82,7 +82,11 @@ func TestServer_StateErrorWhenCheckpointerFails(t *testing.T) {
 
 	thread := postJSON[server.Thread](t, ts.URL+"/v1/threads", `{}`, http.StatusCreated)
 
-	resp, err := http.Get(ts.URL + "/v1/threads/" + thread.ID + "/state")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/state", nil)
+	if err != nil {
+		t.Fatalf("new GET /state request = %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /state error = %v", err)
 	}
@@ -97,7 +101,7 @@ func TestServer_BadJSONReturns400(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/threads", strings.NewReader(`{"thread_id":1}`))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/threads", strings.NewReader(`{"thread_id":1}`))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}

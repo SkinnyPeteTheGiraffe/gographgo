@@ -30,7 +30,7 @@ type CompiledStateGraph[State, Context, Input, Output any] struct {
 }
 
 // Invoke executes the graph with the given input and returns the final state.
-// It blocks until execution completes or ctx is cancelled.
+// It blocks until execution completes or ctx is canceled.
 func (g *CompiledStateGraph[State, Context, Input, Output]) Invoke(ctx context.Context, input Input) (GraphOutput, error) {
 	config := GetConfig(ctx)
 	config = g.mergeConfig(config)

@@ -1897,9 +1897,9 @@ func (s *Server) cancelRun(threadID, runID string) {
 		return
 	}
 	rec.run.Status = RunStatusInterrupted
-	rec.run.Error = "run cancelled"
+	rec.run.Error = "run canceled"
 	rec.run.EndedAt = &ended
-	s.publishEventLocked(rec, RunEvent{Type: "run.interrupted", ThreadID: threadID, RunID: runID, Timestamp: ended, Payload: map[string]any{"error": "run cancelled", "status": string(RunStatusInterrupted)}})
+	s.publishEventLocked(rec, RunEvent{Type: "run.interrupted", ThreadID: threadID, RunID: runID, Timestamp: ended, Payload: map[string]any{"error": "run canceled", "status": string(RunStatusInterrupted)}})
 	s.closeRecordLocked(rec)
 }
 

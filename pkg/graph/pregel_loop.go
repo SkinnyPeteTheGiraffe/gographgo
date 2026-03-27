@@ -692,7 +692,7 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 		// Write a Send object to the TASKS channel (a Topic) rather than
 		// directly to the target node's channel. prepareNextTasks reads the
 		// TASKS channel in the next superstep and creates PUSH tasks with
-		// Send.Arg as the node input, mirroring Python LangGraph behaviour.
+		// Send.Arg as the node input, mirroring Python LangGraph behavior.
 		mu.Lock()
 		pendingWrites = append(pendingWrites, pregelWrite{
 			channel: pregelTasks,

@@ -1,4 +1,4 @@
-// gen_llms generates docs/llms.md — a condensed, LLM-optimised reference that
+// The gen_llms generates docs/llms.md — a condensed, LLM-optimized reference that
 // aggregates README.md and all docs/*.md files into a single file.
 //
 // Run with:

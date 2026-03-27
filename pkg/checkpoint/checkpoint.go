@@ -18,7 +18,7 @@ import (
 // LangGraph supports string and numeric version representations.
 type Version any
 
-// Checkpoint is a serialised snapshot of the graph's channel state at a given
+// Checkpoint is a serialized snapshot of the graph's channel state at a given
 // point during execution.
 //
 // Mirrors Python's langgraph.checkpoint.base.Checkpoint.
@@ -34,7 +34,7 @@ type Checkpoint struct {
 	// Stored as RFC3339/RFC3339Nano-compatible text for parity.
 	TS string
 
-	// ChannelValues holds the serialised channel snapshots keyed by channel name.
+	// ChannelValues holds the serialized channel snapshots keyed by channel name.
 	ChannelValues map[string]any
 
 	// ChannelVersions maps channel names to their monotonically increasing
@@ -87,7 +87,7 @@ type PendingWrite struct {
 	// Channel is the destination channel name.
 	Channel string
 
-	// Value is the serialised value to write.
+	// Value is the serialized value to write.
 	Value any
 }
 

@@ -31,7 +31,7 @@ type SerializedValue struct {
 
 // IdentitySerializer stores values as-is without transformation.
 //
-// This preserves existing behaviour for in-memory checkpoints while still
+// This preserves existing behavior for in-memory checkpoints while still
 // allowing callers to inject custom serialization.
 type IdentitySerializer struct{}
 

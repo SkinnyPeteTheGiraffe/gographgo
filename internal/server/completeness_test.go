@@ -197,7 +197,7 @@ func TestServer_AssistantsContractGaps(t *testing.T) {
 		http.StatusCreated,
 	)
 
-	searchReq, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/assistants/search", strings.NewReader(`{"graph_id":"g1","limit":1}`))
+	searchReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/assistants/search", strings.NewReader(`{"graph_id":"g1","limit":1}`))
 	if err != nil {
 		t.Fatalf("new search request: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestServer_AssistantsContractGaps(t *testing.T) {
 		t.Fatalf("versions = %#v", versions)
 	}
 
-	dupReq, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/assistants", strings.NewReader(`{"assistant_id":"a1","graph_id":"g9","if_exists":"do_nothing"}`))
+	dupReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/assistants", strings.NewReader(`{"assistant_id":"a1","graph_id":"g9","if_exists":"do_nothing"}`))
 	if err != nil {
 		t.Fatalf("new duplicate create request: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestServer_AssistantsContractGaps(t *testing.T) {
 		t.Fatalf("thread2 = %#v", thread2)
 	}
 
-	deleteReq, err := http.NewRequest(http.MethodDelete, ts.URL+"/v1/assistants/a1?delete_threads=true", nil)
+	deleteReq, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, ts.URL+"/v1/assistants/a1?delete_threads=true", nil)
 	if err != nil {
 		t.Fatalf("new delete request: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestServer_AssistantsContractGaps(t *testing.T) {
 	}
 	assertErrorStatus(t, ts.URL+"/v1/assistants/a1", http.StatusNotFound)
 
-	searchReq2, err := http.NewRequest(http.MethodPost, ts.URL+"/v1/assistants/search", strings.NewReader(`{"limit":5,"offset":1}`))
+	searchReq2, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/assistants/search", strings.NewReader(`{"limit":5,"offset":1}`))
 	if err != nil {
 		t.Fatalf("new paged search request: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestServer_AssistantsContractGaps(t *testing.T) {
 	}
 
 	badDeleteURL := ts.URL + "/v1/assistants/a2?delete_threads=notabool"
-	badDeleteReq, err := http.NewRequest(http.MethodDelete, badDeleteURL, nil)
+	badDeleteReq, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, badDeleteURL, nil)
 	if err != nil {
 		t.Fatalf("new bad delete request: %v", err)
 	}
@@ -330,7 +330,12 @@ func TestServer_TopLevelRunsAndRunStreaming(t *testing.T) {
 	if run.ThreadID == "" {
 		t.Fatal("expected top-level run to set thread_id")
 	}
-	createResp, err := http.Post(ts.URL+"/v1/runs", "application/json", strings.NewReader(`{"assistant_id":"a1","input":{"message":"headers"}}`))
+	createReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/runs", strings.NewReader(`{"assistant_id":"a1","input":{"message":"headers"}}`))
+	if err != nil {
+		t.Fatalf("new top-level run request: %v", err)
+	}
+	createReq.Header.Set("Content-Type", "application/json")
+	createResp, err := http.DefaultClient.Do(createReq)
 	if err != nil {
 		t.Fatalf("top-level run request: %v", err)
 	}
@@ -359,7 +364,12 @@ func TestServer_TopLevelRunsAndRunStreaming(t *testing.T) {
 	}
 
 	thread := postJSON[server.Thread](t, ts.URL+"/v1/threads", `{}`, http.StatusCreated)
-	threadRunResp, err := http.Post(ts.URL+"/v1/threads/"+thread.ID+"/runs", "application/json", strings.NewReader(`{"assistant_id":"a1","input":{"message":"thread"}}`))
+	threadRunReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/threads/"+thread.ID+"/runs", strings.NewReader(`{"assistant_id":"a1","input":{"message":"thread"}}`))
+	if err != nil {
+		t.Fatalf("new thread run request: %v", err)
+	}
+	threadRunReq.Header.Set("Content-Type", "application/json")
+	threadRunResp, err := http.DefaultClient.Do(threadRunReq)
 	if err != nil {
 		t.Fatalf("thread run request: %v", err)
 	}
@@ -393,7 +403,7 @@ func TestServer_RunStreamEmitsIncrementalUpdatesBeforeCompletion(t *testing.T) {
 		t.Fatal("timed out waiting for runner start")
 	}
 
-	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=updates", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=updates", nil)
 	if err != nil {
 		t.Fatalf("new stream request: %v", err)
 	}
@@ -451,7 +461,7 @@ func TestServer_RunStreamModeAwareReconnectAndSupportedModes(t *testing.T) {
 	run := postJSON[server.Run](t, ts.URL+"/v1/threads/"+thread.ID+"/runs", `{"assistant_id":"a1","input":{"message":"hello"}}`, http.StatusAccepted)
 	_ = waitRun(t, ts.URL, thread.ID, run.ID)
 
-	streamReq, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=values,updates,messages,tasks,checkpoints,debug,custom,metadata", nil)
+	streamReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=values,updates,messages,tasks,checkpoints,debug,custom,metadata", nil)
 	if err != nil {
 		t.Fatalf("new stream request: %v", err)
 	}
@@ -475,7 +485,7 @@ func TestServer_RunStreamModeAwareReconnectAndSupportedModes(t *testing.T) {
 		t.Fatalf("expected end event in stream body, got %q", raw)
 	}
 
-	reconnectReq, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=updates", nil)
+	reconnectReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=updates", nil)
 	if err != nil {
 		t.Fatalf("new reconnect request: %v", err)
 	}
@@ -527,7 +537,7 @@ func TestServer_GlobalStoreInfoAndCrons(t *testing.T) {
 	}
 
 	putJSONNoResp(t, ts.URL+"/v1/store/items", `{"namespace":["profiles","user"],"key":"name","value":{"first":"Ada"}}`, http.StatusNoContent)
-	ttlResp, err := http.NewRequest(http.MethodPut, ts.URL+"/v1/store/items", strings.NewReader(`{"namespace":["profiles","session"],"key":"token","value":{"token":"abc","score":7,"meta":{"tier":"gold"}},"ttl":1}`))
+	ttlResp, err := http.NewRequestWithContext(context.Background(), http.MethodPut, ts.URL+"/v1/store/items", strings.NewReader(`{"namespace":["profiles","session"],"key":"token","value":{"token":"abc","score":7,"meta":{"tier":"gold"}},"ttl":1}`))
 	if err != nil {
 		t.Fatalf("new ttl put request: %v", err)
 	}
@@ -751,7 +761,7 @@ func TestServer_ThreadOperationsAndAPIKeyAuth(t *testing.T) {
 		t.Fatalf("thread prune = %#v", prune)
 	}
 
-	deleteReq, err := http.NewRequest(http.MethodDelete, ts.URL+"/v1/threads/"+thread.ID, nil)
+	deleteReq, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, ts.URL+"/v1/threads/"+thread.ID, nil)
 	if err != nil {
 		t.Fatalf("new delete request: %v", err)
 	}
@@ -765,7 +775,7 @@ func TestServer_ThreadOperationsAndAPIKeyAuth(t *testing.T) {
 		t.Fatalf("delete status = %d", deleteResp.StatusCode)
 	}
 
-	unauthReq, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/info", nil)
+	unauthReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/info", nil)
 	if err != nil {
 		t.Fatalf("new unauth request: %v", err)
 	}
@@ -786,7 +796,11 @@ func patchJSON[T any](t *testing.T, url, body string, wantStatus int) T {
 
 func assertErrorStatus(t *testing.T, url string, wantStatus int) {
 	t.Helper()
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("get request: %v", err)
 	}
@@ -798,7 +812,7 @@ func assertErrorStatus(t *testing.T, url string, wantStatus int) {
 
 func assertJSONStatusBody(t *testing.T, method, url, body string, wantStatus int) string {
 	t.Helper()
-	req, err := http.NewRequest(method, url, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), method, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -821,7 +835,7 @@ func assertJSONStatusBody(t *testing.T, method, url, body string, wantStatus int
 
 func requestJSON[T any](t *testing.T, method, url, body string, wantStatus int) T {
 	t.Helper()
-	req, err := http.NewRequest(method, url, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), method, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -843,7 +857,7 @@ func requestJSON[T any](t *testing.T, method, url, body string, wantStatus int) 
 
 func requestJSONWithHeaders[T any](t *testing.T, method, url, body string, wantStatus int, headers map[string]string) T {
 	t.Helper()
-	req, err := http.NewRequest(method, url, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), method, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -868,7 +882,7 @@ func requestJSONWithHeaders[T any](t *testing.T, method, url, body string, wantS
 
 func postSSE(t *testing.T, url, body string, wantStatus int) string {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -898,7 +912,7 @@ func postSSE(t *testing.T, url, body string, wantStatus int) string {
 
 func deleteNoBody(t *testing.T, url string, wantStatus int) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, url, nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -914,7 +928,7 @@ func deleteNoBody(t *testing.T, url string, wantStatus int) {
 
 func deleteJSONNoResp(t *testing.T, url, body string, wantStatus int) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodDelete, url, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
