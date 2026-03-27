@@ -82,7 +82,7 @@ func TestServer_StateErrorWhenCheckpointerFails(t *testing.T) {
 
 	thread := postJSON[server.Thread](t, ts.URL+"/v1/threads", `{}`, http.StatusCreated)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/state", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/state", http.NoBody)
 	if err != nil {
 		t.Fatalf("new GET /state request = %v", err)
 	}

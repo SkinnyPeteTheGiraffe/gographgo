@@ -20,15 +20,10 @@ type pendingInterrupt struct {
 	Path        []any
 }
 
-func resumeConfig(metadata map[string]any) (map[string]Dynamic, []Dynamic, bool, error) {
+func resumeConfig(metadata map[string]any) (resumeMap map[string]Dynamic, resumeValues []Dynamic, hasResume bool, err error) {
 	if len(metadata) == 0 {
 		return nil, nil, false, nil
 	}
-
-	var (
-		resumeMap    map[string]Dynamic
-		resumeValues []Dynamic
-	)
 
 	if raw, ok := metadata[ConfigKeyResumeMap]; ok {
 		rm, err := normalizeResumeMap(raw)
@@ -46,7 +41,7 @@ func resumeConfig(metadata map[string]any) (map[string]Dynamic, []Dynamic, bool,
 		resumeValues = values
 	}
 
-	hasResume := len(resumeMap) > 0 || len(resumeValues) > 0
+	hasResume = len(resumeMap) > 0 || len(resumeValues) > 0
 	return resumeMap, resumeValues, hasResume, nil
 }
 

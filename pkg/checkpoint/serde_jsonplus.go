@@ -42,7 +42,7 @@ func (s *JSONPlusSerializer) Deserialize(value any) (any, error) {
 }
 
 // DumpsTyped serializes value into a `(type, bytes)` tuple.
-func (s *JSONPlusSerializer) DumpsTyped(value any) (string, []byte, error) {
+func (s *JSONPlusSerializer) DumpsTyped(value any) (typeName string, payload []byte, err error) {
 	if s == nil {
 		s = NewJSONPlusSerializer()
 	}

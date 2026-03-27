@@ -310,15 +310,15 @@ func (w *EntrypointWorkflow[Input, Output]) mergeConfig(config Config) Config {
 	return config
 }
 
-func loadEntrypointPrevious(ctx context.Context, config Config) (any, *checkpoint.CheckpointTuple, int, error) {
+func loadEntrypointPrevious(ctx context.Context, config Config) (previous any, tuple *checkpoint.CheckpointTuple, step int, err error) {
 	if config.Checkpointer == nil || config.ThreadID == "" {
 		return nil, nil, -1, nil
 	}
-	tuple, err := config.Checkpointer.GetTuple(ctx, config.CheckpointConfig())
+	tuple, err = config.Checkpointer.GetTuple(ctx, config.CheckpointConfig())
 	if err != nil {
 		return nil, nil, -1, fmt.Errorf("loading entrypoint checkpoint: %w", err)
 	}
-	step := -1
+	step = -1
 	if tuple != nil && tuple.Metadata != nil {
 		step = tuple.Metadata.Step
 	}

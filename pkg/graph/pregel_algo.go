@@ -172,24 +172,25 @@ func prepareNextTasks[State, Context, Input, Output any](
 
 	// PUSH tasks from branch-returned Send objects.
 	for _, s := range branchSends {
-		if s.Node != "" && s.Node != End {
-			path := []any{"push", "branch", s.Node, len(tasks)}
-			task := pregelTask[State]{
-				name:     s.Node,
-				path:     path,
-				input:    s.Arg.Value(),
-				isPush:   true,
-				triggers: []string{"branch"},
-			}
-			setTaskNodeMetadata(g, &task)
-			task.id = pregelTaskID(config, step, task.path, task.name, task.triggers)
-			task.checkpointNS = taskCheckpointNamespace(config.CheckpointNS, task.name, task.id)
-			task.resumeValues = taskResumeValues(pendingWrites, task.id)
-			if key, ok := buildNodeCacheKey(g.nodes[task.name], task, config); ok {
-				task.cacheKey = &key
-			}
-			tasks = append(tasks, task)
+		if s.Node == "" || s.Node == End {
+			continue
 		}
+		path := []any{"push", "branch", s.Node, len(tasks)}
+		task := pregelTask[State]{
+			name:     s.Node,
+			path:     path,
+			input:    s.Arg.Value(),
+			isPush:   true,
+			triggers: []string{"branch"},
+		}
+		setTaskNodeMetadata(g, &task)
+		task.id = pregelTaskID(config, step, task.path, task.name, task.triggers)
+		task.checkpointNS = taskCheckpointNamespace(config.CheckpointNS, task.name, task.id)
+		task.resumeValues = taskResumeValues(pendingWrites, task.id)
+		if key, ok := buildNodeCacheKey(g.nodes[task.name], task, config); ok {
+			task.cacheKey = &key
+		}
+		tasks = append(tasks, task)
 	}
 
 	// PULL tasks: one per candidate node, input is current graph state.
@@ -250,7 +251,7 @@ func pregelTaskID(config Config, step int, path []any, name string, triggers []s
 
 // allSourcesCompleted checks if all sources in a waiting edge have completed
 // in the current superstep (i.e., are in prevNodes).
-func allSourcesCompleted[State, Context, Input, Output any](_ *StateGraph[State, Context, Input, Output], sources []string, prevNodes []string) bool {
+func allSourcesCompleted[State, Context, Input, Output any](_ *StateGraph[State, Context, Input, Output], sources, prevNodes []string) bool {
 	prevSet := make(map[string]bool, len(prevNodes))
 	for _, n := range prevNodes {
 		prevSet[n] = true

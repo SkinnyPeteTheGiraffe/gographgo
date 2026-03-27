@@ -1010,8 +1010,8 @@ func (s *Saver) decodeMetadata(payload []byte) (*checkpoint.CheckpointMetadata, 
 	return &out, nil
 }
 
-func (s *Saver) encodePendingWriteValue(value any) (string, []byte, error) {
-	typeName, payload, err := s.dumpsTyped(value)
+func (s *Saver) encodePendingWriteValue(value any) (typeName string, payload []byte, err error) {
+	typeName, payload, err = s.dumpsTyped(value)
 	if err != nil {
 		return "", nil, fmt.Errorf("checkpoint/postgres: serialize write value: %w", err)
 	}
@@ -1149,7 +1149,7 @@ func (s *Saver) decodeMaybeSerialized(value any) (any, error) {
 	return value, nil
 }
 
-func (s *Saver) dumpsTyped(value any) (string, []byte, error) {
+func (s *Saver) dumpsTyped(value any) (typeName string, payload []byte, err error) {
 	raw, err := checkpoint.SerializeForStorage(s.serializer, value)
 	if err != nil {
 		return "", nil, err

@@ -233,7 +233,7 @@ func newTemplateRequest(rawURL string) (*http.Request, error) {
 	if !strings.EqualFold(parsed.Hostname(), "github.com") {
 		return nil, fmt.Errorf("template host not allowed: %q", parsed.Hostname())
 	}
-	req, err := http.NewRequest(http.MethodGet, parsed.String(), nil)
+	req, err := http.NewRequest(http.MethodGet, parsed.String(), http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("build template request: %w", err)
 	}

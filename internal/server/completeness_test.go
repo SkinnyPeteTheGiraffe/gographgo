@@ -266,7 +266,7 @@ func TestServer_AssistantsContractGaps(t *testing.T) {
 		t.Fatalf("thread2 = %#v", thread2)
 	}
 
-	deleteReq, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, ts.URL+"/v1/assistants/a1?delete_threads=true", nil)
+	deleteReq, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, ts.URL+"/v1/assistants/a1?delete_threads=true", http.NoBody)
 	if err != nil {
 		t.Fatalf("new delete request: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestServer_AssistantsContractGaps(t *testing.T) {
 	}
 
 	badDeleteURL := ts.URL + "/v1/assistants/a2?delete_threads=notabool"
-	badDeleteReq, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, badDeleteURL, nil)
+	badDeleteReq, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, badDeleteURL, http.NoBody)
 	if err != nil {
 		t.Fatalf("new bad delete request: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestServer_RunStreamEmitsIncrementalUpdatesBeforeCompletion(t *testing.T) {
 		t.Fatal("timed out waiting for runner start")
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=updates", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=updates", http.NoBody)
 	if err != nil {
 		t.Fatalf("new stream request: %v", err)
 	}
@@ -461,7 +461,7 @@ func TestServer_RunStreamModeAwareReconnectAndSupportedModes(t *testing.T) {
 	run := postJSON[server.Run](t, ts.URL+"/v1/threads/"+thread.ID+"/runs", `{"assistant_id":"a1","input":{"message":"hello"}}`, http.StatusAccepted)
 	_ = waitRun(t, ts.URL, thread.ID, run.ID)
 
-	streamReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=values,updates,messages,tasks,checkpoints,debug,custom,metadata", nil)
+	streamReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=values,updates,messages,tasks,checkpoints,debug,custom,metadata", http.NoBody)
 	if err != nil {
 		t.Fatalf("new stream request: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestServer_RunStreamModeAwareReconnectAndSupportedModes(t *testing.T) {
 		t.Fatalf("expected end event in stream body, got %q", raw)
 	}
 
-	reconnectReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=updates", nil)
+	reconnectReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/stream?stream_mode=updates", http.NoBody)
 	if err != nil {
 		t.Fatalf("new reconnect request: %v", err)
 	}
@@ -686,8 +686,8 @@ func TestServer_ThreadOperationsAndAPIKeyAuth(t *testing.T) {
 		http.StatusOK,
 		map[string]string{"Authorization": "Bearer secret"},
 	)
-	checkpoint, ok := state["checkpoint"].(map[string]any)
-	if !ok || checkpoint["checkpoint_id"] == "" {
+	checkpointData, ok := state["checkpoint"].(map[string]any)
+	if !ok || checkpointData["checkpoint_id"] == "" {
 		t.Fatalf("update state response = %#v", state)
 	}
 
@@ -707,7 +707,7 @@ func TestServer_ThreadOperationsAndAPIKeyAuth(t *testing.T) {
 		t,
 		http.MethodPost,
 		ts.URL+"/v1/threads/"+thread.ID+"/state",
-		`{"checkpoint":{"checkpoint_id":"`+checkpoint["checkpoint_id"].(string)+`"},"values":{"owner":"ada"},"as_node":"reviewer"}`,
+		`{"checkpoint":{"checkpoint_id":"`+checkpointData["checkpoint_id"].(string)+`"},"values":{"owner":"ada"},"as_node":"reviewer"}`,
 		http.StatusOK,
 		map[string]string{"Authorization": "Bearer secret"},
 	)
@@ -761,7 +761,7 @@ func TestServer_ThreadOperationsAndAPIKeyAuth(t *testing.T) {
 		t.Fatalf("thread prune = %#v", prune)
 	}
 
-	deleteReq, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, ts.URL+"/v1/threads/"+thread.ID, nil)
+	deleteReq, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, ts.URL+"/v1/threads/"+thread.ID, http.NoBody)
 	if err != nil {
 		t.Fatalf("new delete request: %v", err)
 	}
@@ -775,7 +775,7 @@ func TestServer_ThreadOperationsAndAPIKeyAuth(t *testing.T) {
 		t.Fatalf("delete status = %d", deleteResp.StatusCode)
 	}
 
-	unauthReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/info", nil)
+	unauthReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/v1/info", http.NoBody)
 	if err != nil {
 		t.Fatalf("new unauth request: %v", err)
 	}
@@ -796,7 +796,7 @@ func patchJSON[T any](t *testing.T, url, body string, wantStatus int) T {
 
 func assertErrorStatus(t *testing.T, url string, wantStatus int) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -912,7 +912,7 @@ func postSSE(t *testing.T, url, body string, wantStatus int) string {
 
 func deleteNoBody(t *testing.T, url string, wantStatus int) {
 	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, url, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, url, http.NoBody)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}
@@ -943,10 +943,10 @@ func deleteJSONNoResp(t *testing.T, url, body string, wantStatus int) {
 	}
 }
 
-func readSSEEvent(t *testing.T, scanner *bufio.Scanner, timeout time.Duration) (string, map[string]any) {
+func readSSEEvent(t *testing.T, scanner *bufio.Scanner, timeout time.Duration) (event string, payload map[string]any) {
 	t.Helper()
 
-	var event string
+	var eventName string
 	var data strings.Builder
 	deadline := time.After(timeout)
 	for {
@@ -977,10 +977,10 @@ func readSSEEvent(t *testing.T, scanner *bufio.Scanner, timeout time.Duration) (
 				if err := json.Unmarshal([]byte(data.String()), &payload); err != nil {
 					t.Fatalf("decode SSE payload: %v", err)
 				}
-				return event, payload
+				return eventName, payload
 			}
 			if strings.HasPrefix(line, "event:") {
-				event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+				eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 				continue
 			}
 			if strings.HasPrefix(line, "data:") {

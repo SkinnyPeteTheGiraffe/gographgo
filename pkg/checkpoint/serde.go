@@ -46,7 +46,7 @@ func (IdentitySerializer) Deserialize(value any) (any, error) {
 }
 
 // DumpsTyped serializes value using JSON-compatible typed envelopes.
-func (IdentitySerializer) DumpsTyped(value any) (string, []byte, error) {
+func (IdentitySerializer) DumpsTyped(value any) (typeName string, payload []byte, err error) {
 	switch v := value.(type) {
 	case nil:
 		return "null", nil, nil
@@ -107,7 +107,7 @@ func (JSONSerializer) Deserialize(value any) (any, error) {
 }
 
 // DumpsTyped serializes value as a `(type, bytes)` tuple.
-func (JSONSerializer) DumpsTyped(value any) (string, []byte, error) {
+func (JSONSerializer) DumpsTyped(value any) (typeName string, payload []byte, err error) {
 	switch v := value.(type) {
 	case nil:
 		return "null", nil, nil
@@ -227,7 +227,7 @@ type serializerCompat struct {
 	legacy Serializer
 }
 
-func (s serializerCompat) DumpsTyped(value any) (string, []byte, error) {
+func (s serializerCompat) DumpsTyped(value any) (typeName string, payload []byte, err error) {
 	if value == nil {
 		return "null", nil, nil
 	}

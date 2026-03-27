@@ -183,9 +183,9 @@ func (g GraphInfo) Mermaid() string {
 		label := escapeMermaidLabel(node.Name)
 		switch node.Kind {
 		case GraphNodeStart, GraphNodeEnd:
-			b.WriteString(fmt.Sprintf("    %s((\"%s\"))\n", id, label))
+			b.WriteString(fmt.Sprintf("    %s((%q))\n", id, label))
 		default:
-			b.WriteString(fmt.Sprintf("    %s[\"%s\"]\n", id, label))
+			b.WriteString(fmt.Sprintf("    %s[%q]\n", id, label))
 		}
 	}
 

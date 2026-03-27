@@ -71,7 +71,7 @@ func TestServer_RunStateHistoryStoreAndEvents(t *testing.T) {
 		t.Fatalf("store value = %v, want first=Ada", storeVal.Value)
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, httpSrv.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/events", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, httpSrv.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/events", http.NoBody)
 	if err != nil {
 		t.Fatalf("new events request: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestServer_ThreadStoreRejectsUnsupportedOptions(t *testing.T) {
 
 	putJSONNoResp(t, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/profile/name", `{"value":{"first":"Ada"}}`, http.StatusOK)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/profile/name?refresh_ttl=true", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/profile/name?refresh_ttl=true", http.NoBody)
 	if err != nil {
 		t.Fatalf("new get request: %v", err)
 	}
@@ -204,7 +204,7 @@ func putJSONNoResp(t *testing.T, url, body string, wantStatus int) {
 
 func getJSON[T any](t *testing.T, url string, wantStatus int) T {
 	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}

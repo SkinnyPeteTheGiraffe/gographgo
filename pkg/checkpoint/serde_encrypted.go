@@ -53,12 +53,12 @@ func (s *EncryptedSerializer) Deserialize(value any) (any, error) {
 }
 
 // DumpsTyped serializes a value and encrypts the serialized bytes.
-func (s *EncryptedSerializer) DumpsTyped(value any) (string, []byte, error) {
+func (s *EncryptedSerializer) DumpsTyped(value any) (typeName string, payload []byte, err error) {
 	if s == nil || s.Cipher == nil {
 		return "", nil, fmt.Errorf("checkpoint.EncryptedSerializer: cipher must not be nil")
 	}
 	ts := ensureTypedSerializer(s.innerSerializer())
-	typeName, payload, err := ts.DumpsTyped(value)
+	typeName, payload, err = ts.DumpsTyped(value)
 	if err != nil {
 		return "", nil, err
 	}
@@ -74,9 +74,9 @@ func (s *EncryptedSerializer) LoadsTyped(typeName string, payload []byte) (any, 
 	ts := ensureTypedSerializer(s.innerSerializer())
 	typ := typeName
 	cipherName := ""
-	if cut := strings.Index(typeName, "+"); cut >= 0 {
-		typ = typeName[:cut]
-		cipherName = typeName[cut+1:]
+	if prefix, suffix, ok := strings.Cut(typeName, "+"); ok {
+		typ = prefix
+		cipherName = suffix
 	}
 	if cipherName == "" {
 		return ts.LoadsTyped(typ, payload)
@@ -133,7 +133,7 @@ func NewAESGCMCipherFromEnv() (*AESGCMCipher, error) {
 }
 
 // Encrypt encrypts plaintext and prefixes nonce in ciphertext.
-func (c *AESGCMCipher) Encrypt(plaintext []byte) (string, []byte, error) {
+func (c *AESGCMCipher) Encrypt(plaintext []byte) (cipherName string, ciphertext []byte, err error) {
 	block, err := aes.NewCipher(c.key)
 	if err != nil {
 		return "", nil, err

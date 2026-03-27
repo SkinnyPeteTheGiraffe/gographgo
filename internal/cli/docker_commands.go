@@ -106,7 +106,7 @@ func upWithRunner(ctx context.Context, stdout, stderr io.Writer, opts UpOptions,
 	return runner(ctx, stdout, stderr, cmdName, args, env)
 }
 
-func detectComposeCommand(preferred string) (string, []string, error) {
+func detectComposeCommand(preferred string) (cmd string, prefix []string, err error) {
 	want := strings.TrimSpace(preferred)
 	if want != "" {
 		if want == "docker-compose" {
