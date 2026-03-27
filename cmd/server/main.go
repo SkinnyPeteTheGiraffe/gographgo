@@ -20,8 +20,8 @@ func main() {
 		Addr:              bootstrap.Addr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		ReadTimeout:       0,
+		WriteTimeout:      0,
 		IdleTimeout:       60 * time.Second,
 	}
 	log.Printf("gographgo server listening on %s", bootstrap.Addr)

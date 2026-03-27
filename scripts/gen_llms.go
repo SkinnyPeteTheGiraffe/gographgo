@@ -72,6 +72,7 @@ func main() {
 	}
 
 	dest := filepath.Join(root, "docs", "llms.md")
+	// #nosec G306 -- llms.md is generated project documentation and should be world-readable.
 	if err := os.WriteFile(dest, []byte(strings.TrimRight(out.String(), "\n")+"\n"), 0o644); err != nil {
 		fatalf("writing %s: %v\n", dest, err)
 	}
