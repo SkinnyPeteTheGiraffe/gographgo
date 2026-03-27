@@ -11,6 +11,11 @@ import (
 	"strings"
 )
 
+const (
+	dockerBinary        = "docker"
+	dockerComposeBinary = "docker-compose"
+)
+
 type commandRunner func(ctx context.Context, stdout, stderr io.Writer, name string, args []string, env map[string]string) error
 
 type stringSliceFlag []string
@@ -109,19 +114,19 @@ func upWithRunner(ctx context.Context, stdout, stderr io.Writer, opts UpOptions,
 func detectComposeCommand(preferred string) (cmd string, prefix []string, err error) {
 	want := strings.TrimSpace(preferred)
 	if want != "" {
-		if want == "docker-compose" {
-			return "docker-compose", nil, nil
+		if want == dockerComposeBinary {
+			return dockerComposeBinary, nil, nil
 		}
-		if want == "docker" {
-			return "docker", []string{"compose"}, nil
+		if want == dockerBinary {
+			return dockerBinary, []string{"compose"}, nil
 		}
 		return "", nil, fmt.Errorf("unsupported compose binary %q", want)
 	}
-	if _, err := exec.LookPath("docker"); err == nil {
-		return "docker", []string{"compose"}, nil
+	if _, err := exec.LookPath(dockerBinary); err == nil {
+		return dockerBinary, []string{"compose"}, nil
 	}
-	if _, err := exec.LookPath("docker-compose"); err == nil {
-		return "docker-compose", nil, nil
+	if _, err := exec.LookPath(dockerComposeBinary); err == nil {
+		return dockerComposeBinary, nil, nil
 	}
 	return "", nil, fmt.Errorf("docker compose is required but was not found")
 }

@@ -35,6 +35,8 @@ type Server struct {
 	mu           sync.RWMutex
 }
 
+const threadSubresourceStream = "stream"
+
 type runRecord struct {
 	run    *Run
 	subs   map[int]chan RunEvent
@@ -183,7 +185,7 @@ func (s *Server) handleThreadSubresources(w http.ResponseWriter, r *http.Request
 		s.handleThreadCopy(w, r, threadID)
 	case "history", "checkpoints":
 		s.handleHistory(w, r, threadID)
-	case "stream":
+	case threadSubresourceStream:
 		s.handleThreadStream(w, r, threadID)
 	case "store":
 		s.handleStore(w, r, threadID, parts[2:])
@@ -478,7 +480,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, threadID str
 		s.createRun(w, r, threadID)
 		return
 	}
-	if suffix[0] == "stream" {
+	if suffix[0] == threadSubresourceStream {
 		if r.Method != http.MethodPost {
 			writeMethodNotAllowed(w, http.MethodPost)
 			return
@@ -1429,7 +1431,7 @@ func (s *Server) handleTopLevelRunSubresources(w http.ResponseWriter, r *http.Re
 	}
 
 	switch parts[0] {
-	case "stream":
+	case threadSubresourceStream:
 		if r.Method != http.MethodPost {
 			writeMethodNotAllowed(w, http.MethodPost)
 			return
@@ -1555,7 +1557,7 @@ func (s *Server) handleRunSubresource(w http.ResponseWriter, r *http.Request, th
 			return
 		}
 		s.joinRun(w, r, threadID, runID)
-	case "stream":
+	case threadSubresourceStream:
 		if r.Method != http.MethodGet {
 			writeMethodNotAllowed(w, http.MethodGet)
 			return

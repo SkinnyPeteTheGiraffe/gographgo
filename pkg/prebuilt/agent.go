@@ -19,6 +19,8 @@ import (
 const (
 	agentNodeName     = "agent"
 	toolsNodeName     = "tools"
+	roleAssistant     = "assistant"
+	roleTool          = "tool"
 	defaultCheckpoint = "prebuilt/react"
 	remainingStepsMsg = "Sorry, need more steps to process this request."
 )
@@ -812,7 +814,7 @@ func (a *ReactAgent) invokeCoreFrom(
 		if err != nil {
 			return invokeCoreResult{}, err
 		}
-		assistant := Message{Role: "assistant", Content: resp.Content, Name: resp.Name, ToolCalls: cloneToolCalls(resp.ToolCalls)}
+		assistant := Message{Role: roleAssistant, Content: resp.Content, Name: resp.Name, ToolCalls: cloneToolCalls(resp.ToolCalls)}
 		if assistant.Name == "" {
 			assistant.Name = a.name
 		}
@@ -849,7 +851,7 @@ func (a *ReactAgent) invokeCoreFrom(
 		}
 
 		if needsMoreSteps(current.RemainingSteps-step, pendingCalls) {
-			current.Messages[len(current.Messages)-1] = Message{Role: "assistant", Name: assistant.Name, Content: remainingStepsMsg}
+			current.Messages[len(current.Messages)-1] = Message{Role: roleAssistant, Name: assistant.Name, Content: remainingStepsMsg}
 			if err := a.generateStructuredResponse(ctx, &current, runtime); err != nil {
 				return invokeCoreResult{}, err
 			}
@@ -1466,7 +1468,7 @@ func shouldReturnDirectFromHistory(node *ToolNode, messages []Message) bool {
 	idx := len(messages) - 1
 	for idx >= 0 {
 		message := messages[idx]
-		if message.Role != "tool" {
+		if message.Role != roleTool {
 			break
 		}
 		if node.IsReturnDirect(message.Name) {
@@ -1478,7 +1480,7 @@ func shouldReturnDirectFromHistory(node *ToolNode, messages []Message) bool {
 		return false
 	}
 	assistant := messages[idx]
-	if assistant.Role != "assistant" || len(assistant.ToolCalls) == 0 {
+	if assistant.Role != roleAssistant || len(assistant.ToolCalls) == 0 {
 		return false
 	}
 	for _, call := range assistant.ToolCalls {
@@ -1500,13 +1502,13 @@ func validateChatHistory(messages []Message) error {
 	toolResultIDs := make(map[string]struct{}, len(messages))
 	allCalls := make([]missingToolCall, 0)
 	for _, message := range messages {
-		if message.Role == "assistant" {
+		if message.Role == roleAssistant {
 			for _, call := range message.ToolCalls {
 				allCalls = append(allCalls, missingToolCall{ID: call.ID, Name: call.Name})
 			}
 			continue
 		}
-		if message.Role == "tool" {
+		if message.Role == roleTool {
 			id := strings.TrimSpace(message.ToolCallID)
 			if id != "" {
 				toolResultIDs[id] = struct{}{}
@@ -1661,7 +1663,7 @@ func pendingToolCalls(calls []ToolCall, messages []Message) []ToolCall {
 	}
 	toolResults := make(map[string]struct{}, len(messages))
 	for _, m := range messages {
-		if m.Role != "tool" || strings.TrimSpace(m.ToolCallID) == "" {
+		if m.Role != roleTool || strings.TrimSpace(m.ToolCallID) == "" {
 			continue
 		}
 		toolResults[m.ToolCallID] = struct{}{}

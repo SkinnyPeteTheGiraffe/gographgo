@@ -48,9 +48,9 @@ func (s *JSONPlusSerializer) DumpsTyped(value any) (typeName string, payload []b
 	}
 	switch v := value.(type) {
 	case nil:
-		return "null", nil, nil
+		return serializedTypeNull, nil, nil
 	case []byte:
-		return "bytes", append([]byte(nil), v...), nil
+		return serializedTypeBytes, append([]byte(nil), v...), nil
 	case time.Time:
 		return "time", []byte(v.UTC().Format(time.RFC3339Nano)), nil
 	case uuid.UUID:
@@ -66,9 +66,9 @@ func (s *JSONPlusSerializer) LoadsTyped(typeName string, payload []byte) (any, e
 		s = NewJSONPlusSerializer()
 	}
 	switch typeName {
-	case "null":
+	case serializedTypeNull:
 		return nil, nil
-	case "bytes":
+	case serializedTypeBytes:
 		return append([]byte(nil), payload...), nil
 	case "time":
 		out, err := time.Parse(time.RFC3339Nano, string(payload))
