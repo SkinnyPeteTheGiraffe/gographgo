@@ -29,7 +29,7 @@ func (rc *RunsClient) Get(ctx context.Context, threadID, runID string) (*Run, er
 }
 
 // Events streams persisted run events.
-func (rc *RunsClient) Events(ctx context.Context, threadID, runID string) (<-chan RunEvent, <-chan error) {
+func (rc *RunsClient) Events(ctx context.Context, threadID, runID string) (events <-chan RunEvent, errs <-chan error) {
 	parts, errs := rc.client.streamSSE(ctx, http.MethodGet, "/v1/threads/"+threadID+"/runs/"+runID+"/events", nil, nil)
 	out := make(chan RunEvent, 32)
 	outErrs := make(chan error, 1)
@@ -64,7 +64,7 @@ func (rc *RunsClient) Events(ctx context.Context, threadID, runID string) (<-cha
 }
 
 // Stream creates a run and streams stream-mode parts.
-func (rc *RunsClient) Stream(ctx context.Context, threadID string, req RunStreamRequest) (<-chan StreamPart, <-chan error) {
+func (rc *RunsClient) Stream(ctx context.Context, threadID string, req RunStreamRequest) (parts <-chan StreamPart, errs <-chan error) {
 	p := "/v1/runs/stream"
 	if threadID != "" {
 		p = "/v1/threads/" + threadID + "/runs/stream"
@@ -77,7 +77,7 @@ func (rc *RunsClient) StreamTyped(
 	ctx context.Context,
 	threadID string,
 	req RunStreamRequest,
-) (<-chan StreamPartV2, <-chan error) {
+) (parts <-chan StreamPartV2, errs <-chan error) {
 	p := "/v1/runs/stream"
 	if threadID != "" {
 		p = "/v1/threads/" + threadID + "/runs/stream"
@@ -138,7 +138,7 @@ func (rc *RunsClient) Join(ctx context.Context, threadID, runID string) (map[str
 }
 
 // JoinStream streams output from a run until completion.
-func (rc *RunsClient) JoinStream(ctx context.Context, threadID, runID string, req RunJoinStreamRequest) (<-chan StreamPart, <-chan error) {
+func (rc *RunsClient) JoinStream(ctx context.Context, threadID, runID string, req RunJoinStreamRequest) (parts <-chan StreamPart, errs <-chan error) {
 	p, err := withQuery(
 		"/v1/threads/"+threadID+"/runs/"+runID+"/stream",
 		map[string]any{"cancel_on_disconnect": req.CancelOnDisconnect, "stream_mode": req.StreamMode},
@@ -161,7 +161,7 @@ func (rc *RunsClient) JoinStreamTyped(
 	threadID string,
 	runID string,
 	req RunJoinStreamRequest,
-) (<-chan StreamPartV2, <-chan error) {
+) (parts <-chan StreamPartV2, errs <-chan error) {
 	p, err := withQuery(
 		"/v1/threads/"+threadID+"/runs/"+runID+"/stream",
 		map[string]any{"cancel_on_disconnect": req.CancelOnDisconnect, "stream_mode": req.StreamMode},

@@ -237,7 +237,7 @@ func compileToolArgsValidator(source any) (ToolArgsValidator, error) {
 	}
 
 	t := reflect.TypeOf(source)
-	validatorType := reflect.TypeOf((ToolArgsValidator)(nil))
+	validatorType := reflect.TypeOf((*ToolArgsValidator)(nil)).Elem()
 	if t.Kind() == reflect.Func && t.AssignableTo(validatorType) {
 		converted := reflect.ValueOf(source).Convert(validatorType)
 		validator, _ := converted.Interface().(ToolArgsValidator)

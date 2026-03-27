@@ -1435,7 +1435,7 @@ func splitCheckpointNamespace(ns string) []string {
 	return out
 }
 
-func mergeNamespaces(base []string, override []string) []string {
+func mergeNamespaces(base, override []string) []string {
 	if len(override) == 0 {
 		return append([]string(nil), base...)
 	}
@@ -1445,9 +1445,9 @@ func mergeNamespaces(base []string, override []string) []string {
 	return ns
 }
 
-func streamWriterPayload(v any, namespace []string) (StreamMode, any, []string) {
+func streamWriterPayload(v any, namespace []string) (mode StreamMode, data any, outNamespace []string) {
 	if emit, ok := v.(StreamEmit); ok {
-		mode := emit.Mode
+		mode = emit.Mode
 		if mode == "" {
 			mode = StreamModeCustom
 		}

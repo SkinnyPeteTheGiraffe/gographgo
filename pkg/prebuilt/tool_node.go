@@ -515,9 +515,10 @@ func (n *ToolNode) RunResultsWithState(ctx context.Context, calls []ToolCall, st
 				result ToolCallResult
 				err    error
 			)
-			if n.wrapToolResult != nil {
+			switch {
+			case n.wrapToolResult != nil:
 				result, err = n.wrapToolResult(request, exec)
-			} else if n.wrapToolCall != nil {
+			case n.wrapToolCall != nil:
 				msg, wrapErr := n.wrapToolCall(request, func(req ToolCallRequest) (ToolMessage, error) {
 					execResult, execErr := exec(req)
 					if execErr != nil {
@@ -530,7 +531,7 @@ func (n *ToolNode) RunResultsWithState(ctx context.Context, calls []ToolCall, st
 				})
 				result = toolMessageResult(msg)
 				err = wrapErr
-			} else {
+			default:
 				result, err = exec(request)
 			}
 			if err != nil {
@@ -734,7 +735,7 @@ func (n *ToolNode) joinToolNames() string {
 	return out
 }
 
-func contentOutput(v any) (string, []map[string]any, error) {
+func contentOutput(v any) (content string, blocks []map[string]any, err error) {
 	if v == nil {
 		return "", nil, nil
 	}

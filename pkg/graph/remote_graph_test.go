@@ -24,7 +24,7 @@ func TestRemoteGraph_InvokeGetUpdateStateAndHistory(t *testing.T) {
 		invokeReq    sdk.RunCreateRequest
 		sync.Mutex
 	}
-	cap := &captures{}
+	captured := &captures{}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
@@ -35,10 +35,10 @@ func TestRemoteGraph_InvokeGetUpdateStateAndHistory(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode invoke request: %v", err)
 			}
-			cap.Lock()
-			cap.invokeThread = threadID
-			cap.invokeReq = req
-			cap.Unlock()
+			captured.Lock()
+			captured.invokeThread = threadID
+			captured.invokeReq = req
+			captured.Unlock()
 			writeJSON(t, w, http.StatusAccepted, map[string]any{
 				"run_id":       "run-1",
 				"thread_id":    threadID,
@@ -69,9 +69,9 @@ func TestRemoteGraph_InvokeGetUpdateStateAndHistory(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode update state request: %v", err)
 			}
-			cap.Lock()
-			cap.updateReqs = append(cap.updateReqs, req)
-			cap.Unlock()
+			captured.Lock()
+			captured.updateReqs = append(captured.updateReqs, req)
+			captured.Unlock()
 			writeJSON(t, w, http.StatusOK, map[string]any{"checkpoint": map[string]any{"checkpoint_id": "cp-next"}})
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/history"):
 			threadID := pathPart(path, 2)
@@ -152,31 +152,31 @@ func TestRemoteGraph_InvokeGetUpdateStateAndHistory(t *testing.T) {
 		t.Fatalf("GetStateHistory len = %d, want 1", len(history))
 	}
 
-	cap.Lock()
-	defer cap.Unlock()
-	if cap.invokeThread != "thread-ctx" {
-		t.Fatalf("invoke thread = %q, want thread-ctx", cap.invokeThread)
+	captured.Lock()
+	defer captured.Unlock()
+	if captured.invokeThread != "thread-ctx" {
+		t.Fatalf("invoke thread = %q, want thread-ctx", captured.invokeThread)
 	}
-	if cap.invokeReq.AssistantID != "assistant-default" {
-		t.Fatalf("assistant_id = %q, want assistant-default", cap.invokeReq.AssistantID)
+	if captured.invokeReq.AssistantID != "assistant-default" {
+		t.Fatalf("assistant_id = %q, want assistant-default", captured.invokeReq.AssistantID)
 	}
-	if cap.invokeReq.Durability != "sync" {
-		t.Fatalf("durability = %q, want sync", cap.invokeReq.Durability)
+	if captured.invokeReq.Durability != "sync" {
+		t.Fatalf("durability = %q, want sync", captured.invokeReq.Durability)
 	}
-	if cap.invokeReq.CheckpointID != "cp-ctx" {
-		t.Fatalf("checkpoint_id = %q, want cp-ctx", cap.invokeReq.CheckpointID)
+	if captured.invokeReq.CheckpointID != "cp-ctx" {
+		t.Fatalf("checkpoint_id = %q, want cp-ctx", captured.invokeReq.CheckpointID)
 	}
-	if cap.invokeReq.Metadata["from_default"] != true || cap.invokeReq.Metadata["from_ctx"] != "yes" {
-		t.Fatalf("merged metadata = %#v", cap.invokeReq.Metadata)
+	if captured.invokeReq.Metadata["from_default"] != true || captured.invokeReq.Metadata["from_ctx"] != "yes" {
+		t.Fatalf("merged metadata = %#v", captured.invokeReq.Metadata)
 	}
-	if len(cap.updateReqs) != 2 {
-		t.Fatalf("update request count = %d, want 2", len(cap.updateReqs))
+	if len(captured.updateReqs) != 2 {
+		t.Fatalf("update request count = %d, want 2", len(captured.updateReqs))
 	}
-	if cap.updateReqs[0].CheckpointID != "cp-ctx" || cap.updateReqs[0].AsNode != "" {
-		t.Fatalf("first update req = %#v, want checkpoint_id=cp-ctx and empty as_node", cap.updateReqs[0])
+	if captured.updateReqs[0].CheckpointID != "cp-ctx" || captured.updateReqs[0].AsNode != "" {
+		t.Fatalf("first update req = %#v, want checkpoint_id=cp-ctx and empty as_node", captured.updateReqs[0])
 	}
-	if cap.updateReqs[1].CheckpointID != "cp-ctx" || cap.updateReqs[1].AsNode != "worker" {
-		t.Fatalf("second update req = %#v, want checkpoint_id=cp-ctx and as_node=worker", cap.updateReqs[1])
+	if captured.updateReqs[1].CheckpointID != "cp-ctx" || captured.updateReqs[1].AsNode != "worker" {
+		t.Fatalf("second update req = %#v, want checkpoint_id=cp-ctx and as_node=worker", captured.updateReqs[1])
 	}
 }
 
@@ -189,23 +189,23 @@ func TestRemoteGraph_AssistantIntrospection(t *testing.T) {
 		subgraphsPath    string
 		sync.Mutex
 	}
-	cap := &captures{}
+	captured := &captures{}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch {
 		case r.Method == http.MethodGet && path == "/v1/assistants/assistant-1/graph":
-			cap.Lock()
-			cap.graphXray = r.URL.Query().Get("xray")
-			cap.Unlock()
+			captured.Lock()
+			captured.graphXray = r.URL.Query().Get("xray")
+			captured.Unlock()
 			writeJSON(t, w, http.StatusOK, map[string]any{"nodes": []any{"a", "b"}})
 		case r.Method == http.MethodGet && path == "/v1/assistants/assistant-1/schemas":
 			writeJSON(t, w, http.StatusOK, map[string]any{"input": map[string]any{"type": "object"}})
 		case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/assistants/assistant-1/subgraphs"):
-			cap.Lock()
-			cap.subgraphsPath = path
-			cap.subgraphsRecurse = r.URL.Query().Get("recurse")
-			cap.Unlock()
+			captured.Lock()
+			captured.subgraphsPath = path
+			captured.subgraphsRecurse = r.URL.Query().Get("recurse")
+			captured.Unlock()
 			writeJSON(t, w, http.StatusOK, map[string]any{"subgraphs": []any{map[string]any{"namespace": "foo"}}})
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -247,16 +247,16 @@ func TestRemoteGraph_AssistantIntrospection(t *testing.T) {
 		t.Fatalf("GetSubgraphs result = %#v", gotSubgraphs)
 	}
 
-	cap.Lock()
-	defer cap.Unlock()
-	if cap.graphXray != "true" {
-		t.Fatalf("graph xray query = %q, want true", cap.graphXray)
+	captured.Lock()
+	defer captured.Unlock()
+	if captured.graphXray != "true" {
+		t.Fatalf("graph xray query = %q, want true", captured.graphXray)
 	}
-	if cap.subgraphsPath != "/v1/assistants/assistant-1/subgraphs/foo" {
-		t.Fatalf("subgraphs path = %q, want /v1/assistants/assistant-1/subgraphs/foo", cap.subgraphsPath)
+	if captured.subgraphsPath != "/v1/assistants/assistant-1/subgraphs/foo" {
+		t.Fatalf("subgraphs path = %q, want /v1/assistants/assistant-1/subgraphs/foo", captured.subgraphsPath)
 	}
-	if cap.subgraphsRecurse != "true" {
-		t.Fatalf("subgraphs recurse query = %q, want true", cap.subgraphsRecurse)
+	if captured.subgraphsRecurse != "true" {
+		t.Fatalf("subgraphs recurse query = %q, want true", captured.subgraphsRecurse)
 	}
 }
 
@@ -285,7 +285,7 @@ func TestRemoteGraph_StreamAndTypedStream(t *testing.T) {
 		streamReqs []sdk.RunStreamRequest
 		sync.Mutex
 	}
-	cap := &captures{}
+	captured := &captures{}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/runs/stream") {
@@ -293,9 +293,9 @@ func TestRemoteGraph_StreamAndTypedStream(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode stream request: %v", err)
 			}
-			cap.Lock()
-			cap.streamReqs = append(cap.streamReqs, req)
-			cap.Unlock()
+			captured.Lock()
+			captured.streamReqs = append(captured.streamReqs, req)
+			captured.Unlock()
 
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("event: values|root\ndata: {\"count\":1,\"__interrupt__\":[{\"id\":\"i1\",\"value\":\"need-input\"}]}\n\n"))
@@ -352,16 +352,16 @@ func TestRemoteGraph_StreamAndTypedStream(t *testing.T) {
 		t.Fatal("timeout waiting for typed stream")
 	}
 
-	cap.Lock()
-	defer cap.Unlock()
-	if len(cap.streamReqs) < 2 {
-		t.Fatalf("stream request count = %d, want at least 2", len(cap.streamReqs))
+	captured.Lock()
+	defer captured.Unlock()
+	if len(captured.streamReqs) < 2 {
+		t.Fatalf("stream request count = %d, want at least 2", len(captured.streamReqs))
 	}
-	if got := strings.Join(cap.streamReqs[0].StreamMode, ","); got != "values,updates" {
+	if got := strings.Join(captured.streamReqs[0].StreamMode, ","); got != "values,updates" {
 		t.Fatalf("duplex stream_mode = %q, want values,updates", got)
 	}
-	if cap.streamReqs[0].AssistantID != "assistant-s" {
-		t.Fatalf("duplex assistant_id = %q, want assistant-s", cap.streamReqs[0].AssistantID)
+	if captured.streamReqs[0].AssistantID != "assistant-s" {
+		t.Fatalf("duplex assistant_id = %q, want assistant-s", captured.streamReqs[0].AssistantID)
 	}
 }
 
@@ -374,14 +374,14 @@ func TestRemoteGraph_ThreadlessInvokeAndStream(t *testing.T) {
 		getRunPath       string
 		sync.Mutex
 	}
-	cap := &captures{}
+	captured := &captures{}
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/runs":
-			cap.Lock()
-			cap.createRunPath = r.URL.Path
-			cap.Unlock()
+			captured.Lock()
+			captured.createRunPath = r.URL.Path
+			captured.Unlock()
 			writeJSON(t, w, http.StatusAccepted, map[string]any{
 				"run_id":       "run-top",
 				"thread_id":    "generated-thread",
@@ -390,9 +390,9 @@ func TestRemoteGraph_ThreadlessInvokeAndStream(t *testing.T) {
 				"created_at":   time.Now().UTC().Format(time.RFC3339Nano),
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/threads/generated-thread/runs/run-top":
-			cap.Lock()
-			cap.getRunPath = r.URL.Path
-			cap.Unlock()
+			captured.Lock()
+			captured.getRunPath = r.URL.Path
+			captured.Unlock()
 			writeJSON(t, w, http.StatusOK, map[string]any{
 				"run_id":       "run-top",
 				"thread_id":    "generated-thread",
@@ -402,9 +402,9 @@ func TestRemoteGraph_ThreadlessInvokeAndStream(t *testing.T) {
 				"created_at":   time.Now().UTC().Format(time.RFC3339Nano),
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/runs/stream":
-			cap.Lock()
-			cap.streamCreatePath = r.URL.Path
-			cap.Unlock()
+			captured.Lock()
+			captured.streamCreatePath = r.URL.Path
+			captured.Unlock()
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("event: values\ndata: {\"count\":1}\n\n"))
 			_, _ = w.Write([]byte("event: end\ndata: {}\n\n"))
@@ -445,16 +445,16 @@ func TestRemoteGraph_ThreadlessInvokeAndStream(t *testing.T) {
 		t.Fatalf("stream parts = %#v", parts)
 	}
 
-	cap.Lock()
-	defer cap.Unlock()
-	if cap.createRunPath != "/v1/runs" {
-		t.Fatalf("create run path = %q, want /v1/runs", cap.createRunPath)
+	captured.Lock()
+	defer captured.Unlock()
+	if captured.createRunPath != "/v1/runs" {
+		t.Fatalf("create run path = %q, want /v1/runs", captured.createRunPath)
 	}
-	if cap.getRunPath != "/v1/threads/generated-thread/runs/run-top" {
-		t.Fatalf("get run path = %q, want generated thread path", cap.getRunPath)
+	if captured.getRunPath != "/v1/threads/generated-thread/runs/run-top" {
+		t.Fatalf("get run path = %q, want generated thread path", captured.getRunPath)
 	}
-	if cap.streamCreatePath != "/v1/runs/stream" {
-		t.Fatalf("stream create path = %q, want /v1/runs/stream", cap.streamCreatePath)
+	if captured.streamCreatePath != "/v1/runs/stream" {
+		t.Fatalf("stream create path = %q, want /v1/runs/stream", captured.streamCreatePath)
 	}
 }
 

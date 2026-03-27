@@ -111,10 +111,10 @@ func (m *boundModel) BoundToolNames() []string {
 
 type testStore struct{}
 
-func (testStore) Get(_ []string, _ string) (any, bool, error) { return nil, false, nil }
-func (testStore) Set(_ []string, _ string, _ any) error       { return nil }
-func (testStore) Delete(_ []string, _ string) error           { return nil }
-func (testStore) List(_ []string, _ string) ([]string, error) { return nil, nil }
+func (testStore) Get(_ []string, _ string) (value any, ok bool, err error) { return nil, false, nil }
+func (testStore) Set(_ []string, _ string, _ any) error                    { return nil }
+func (testStore) Delete(_ []string, _ string) error                        { return nil }
+func (testStore) List(_ []string, _ string) ([]string, error)              { return nil, nil }
 func (testStore) Search(_ []string, _ string, _ int) ([]string, error) {
 	return nil, nil
 }

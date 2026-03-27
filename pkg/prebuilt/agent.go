@@ -710,7 +710,7 @@ func (a *ReactAgent) ResumeStateWithOptions(
 		if shouldReturnDirectFromHistory(a.toolNode, state.Messages) {
 			return a.finalizeStateResult(ctx, invokeCoreResult{state: state}, options)
 		}
-		state.RemainingSteps = max(1, state.RemainingSteps-1)
+		state.RemainingSteps = maxInt(1, state.RemainingSteps-1)
 		core, invokeErr := a.invokeCore(ctx, state, runtime)
 		if invokeErr != nil {
 			return AgentStateResult{}, invokeErr
@@ -720,7 +720,7 @@ func (a *ReactAgent) ResumeStateWithOptions(
 		if shouldReturnDirectFromHistory(a.toolNode, state.Messages) {
 			return a.finalizeStateResult(ctx, invokeCoreResult{state: state}, options)
 		}
-		state.RemainingSteps = max(1, state.RemainingSteps-1)
+		state.RemainingSteps = maxInt(1, state.RemainingSteps-1)
 		core, invokeErr := a.invokeCore(ctx, state, runtime)
 		if invokeErr != nil {
 			return AgentStateResult{}, invokeErr
@@ -1044,7 +1044,7 @@ func applyToolCommand(state *AgentState, command graph.Command) error {
 	return nil
 }
 
-func mergeAgentMessages(left []Message, right []Message) []Message {
+func mergeAgentMessages(left, right []Message) []Message {
 	if len(right) == 0 {
 		return cloneMessages(left)
 	}
@@ -1736,7 +1736,7 @@ func newAgentCheckpointID() string {
 	return fmt.Sprintf("%s-%s", time.Now().UTC().Format("20060102T150405.000000000Z"), uuid.New().String())
 }
 
-func max(a, b int) int {
+func maxInt(a, b int) int {
 	if a > b {
 		return a
 	}

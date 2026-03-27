@@ -157,7 +157,7 @@ func (c *Client) streamSSEV2(
 	reqPath string,
 	in any,
 	headers map[string]string,
-) (<-chan StreamPartV2, <-chan error) {
+) (partCh <-chan StreamPartV2, errCh <-chan error) {
 	rawParts, rawErrs := c.streamSSE(ctx, method, reqPath, in, headers)
 	parts := make(chan StreamPartV2, 32)
 	errs := make(chan error, 1)

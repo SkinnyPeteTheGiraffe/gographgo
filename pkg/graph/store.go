@@ -34,7 +34,7 @@ func NewInMemoryStore() *InMemoryStore {
 }
 
 // Get returns a value in a namespace and whether it exists.
-func (s *InMemoryStore) Get(namespace []string, key string) (any, bool, error) {
+func (s *InMemoryStore) Get(namespace []string, key string) (value any, ok bool, err error) {
 	item, err := s.GetItem(context.Background(), namespace, key, StoreGetOptions{})
 	if err != nil {
 		return nil, false, err
@@ -446,7 +446,7 @@ func shouldRefreshTTL(refresh *bool) bool {
 	return *refresh
 }
 
-func hasNamespacePrefix(namespace []string, prefix []string) bool {
+func hasNamespacePrefix(namespace, prefix []string) bool {
 	if len(prefix) == 0 {
 		return true
 	}
