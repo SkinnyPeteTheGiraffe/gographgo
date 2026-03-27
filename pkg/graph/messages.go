@@ -74,34 +74,51 @@ type MessageGraph = StateGraph[MessagesState, any, MessagesState, MessagesState]
 //	    return graph.AddMessages(left, right)
 //	})
 func AddMessages(left, right []Message) []Message {
-	// Assign missing IDs.
-	for i := range left {
-		if left[i].ID == "" {
-			left[i].ID = uuid.New().String()
-		}
-	}
+	left = normalizeMessageIDs(left)
+	right = normalizeMessageIDs(right)
 
-	// Check for remove-all sentinel in right.
-	removeAllIdx := -1
-	for i := range right {
-		if right[i].ID == "" {
-			right[i].ID = uuid.New().String()
-		}
-		if isRemoveAllMessagesSentinel(right[i]) || right[i].Content == RemoveAllMessages {
-			removeAllIdx = i
-		}
-	}
+	removeAllIdx := removeAllMessageIndex(right)
 	if removeAllIdx >= 0 {
 		return append([]Message(nil), right[removeAllIdx+1:]...)
 	}
 
-	// Build index of left by ID.
 	merged := append([]Message(nil), left...)
 	indexByID := make(map[string]int, len(merged))
 	for i, m := range merged {
 		indexByID[m.ID] = i
 	}
+	idsToRemove := applyMessageUpserts(&merged, right, indexByID)
 
+	if len(idsToRemove) == 0 {
+		return merged
+	}
+	return removeMessagesByID(merged, idsToRemove)
+}
+
+func normalizeMessageIDs(messages []Message) []Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := append([]Message(nil), messages...)
+	for i := range out {
+		if out[i].ID == "" {
+			out[i].ID = uuid.New().String()
+		}
+	}
+	return out
+}
+
+func removeAllMessageIndex(messages []Message) int {
+	removeAllIdx := -1
+	for i := range messages {
+		if isRemoveAllMessagesSentinel(messages[i]) || messages[i].Content == RemoveAllMessages {
+			removeAllIdx = i
+		}
+	}
+	return removeAllIdx
+}
+
+func applyMessageUpserts(merged *[]Message, right []Message, indexByID map[string]int) map[string]bool {
 	idsToRemove := make(map[string]bool)
 	for _, m := range right {
 		if m.Role == "remove" {
@@ -109,16 +126,16 @@ func AddMessages(left, right []Message) []Message {
 			continue
 		}
 		if idx, exists := indexByID[m.ID]; exists {
-			merged[idx] = m
-		} else {
-			indexByID[m.ID] = len(merged)
-			merged = append(merged, m)
+			(*merged)[idx] = m
+			continue
 		}
+		indexByID[m.ID] = len(*merged)
+		*merged = append(*merged, m)
 	}
+	return idsToRemove
+}
 
-	if len(idsToRemove) == 0 {
-		return merged
-	}
+func removeMessagesByID(merged []Message, idsToRemove map[string]bool) []Message {
 	out := merged[:0]
 	for _, m := range merged {
 		if !idsToRemove[m.ID] {

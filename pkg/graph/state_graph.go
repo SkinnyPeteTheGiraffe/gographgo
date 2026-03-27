@@ -560,58 +560,20 @@ func (g *StateGraph[State, Context, Input, Output]) Validate(interrupt []string)
 		return err
 	}
 
-	// Check that all sources exist
-	allSources := make(map[string]bool)
-	for _, edge := range g.edges {
-		allSources[edge.Source] = true
+	sources := g.collectValidationSources()
+	if err := g.validateKnownSources(sources); err != nil {
+		return err
 	}
-	for source := range g.branches {
-		allSources[source] = true
-	}
-
-	// Check waiting edge sources
-	for _, we := range g.waitingEdges {
-		for _, src := range we.Sources {
-			allSources[src] = true
-		}
+	if err := validateGraphEntryPoint(sources); err != nil {
+		return err
 	}
 
-	for source := range allSources {
-		if source != Start && g.nodes[source] == nil {
-			return fmt.Errorf("found edge starting at unknown node '%s'", source)
-		}
+	targets := g.collectValidationTargets()
+	if err := g.validateKnownTargets(targets); err != nil {
+		return err
 	}
-
-	// Check that graph has entry point
-	if !allSources[Start] {
-		return fmt.Errorf("graph must have an entry point: add at least one edge from Start")
-	}
-
-	// Check that all targets exist
-	allTargets := make(map[string]bool)
-	for _, edge := range g.edges {
-		allTargets[edge.Target] = true
-	}
-
-	// Check waiting edge targets
-	for _, we := range g.waitingEdges {
-		allTargets[we.Target] = true
-	}
-
-	for target := range allTargets {
-		if target != End && g.nodes[target] == nil {
-			return fmt.Errorf("found edge ending at unknown node '%s'", target)
-		}
-	}
-
-	// Validate interrupt nodes
-	for _, node := range interrupt {
-		if node == All {
-			continue
-		}
-		if g.nodes[node] == nil {
-			return fmt.Errorf("interrupt node '%s' not found", node)
-		}
+	if err := g.validateInterruptNodes(interrupt); err != nil {
+		return err
 	}
 
 	// Validate branch ends against node destinations
@@ -623,6 +585,70 @@ func (g *StateGraph[State, Context, Input, Output]) Validate(interrupt []string)
 	return nil
 }
 
+func (g *StateGraph[State, Context, Input, Output]) collectValidationSources() map[string]bool {
+	out := make(map[string]bool)
+	for _, edge := range g.edges {
+		out[edge.Source] = true
+	}
+	for source := range g.branches {
+		out[source] = true
+	}
+	for _, waiting := range g.waitingEdges {
+		for _, source := range waiting.Sources {
+			out[source] = true
+		}
+	}
+	return out
+}
+
+func (g *StateGraph[State, Context, Input, Output]) collectValidationTargets() map[string]bool {
+	out := make(map[string]bool)
+	for _, edge := range g.edges {
+		out[edge.Target] = true
+	}
+	for _, waiting := range g.waitingEdges {
+		out[waiting.Target] = true
+	}
+	return out
+}
+
+func (g *StateGraph[State, Context, Input, Output]) validateKnownSources(sources map[string]bool) error {
+	for source := range sources {
+		if source != Start && g.nodes[source] == nil {
+			return fmt.Errorf("found edge starting at unknown node '%s'", source)
+		}
+	}
+	return nil
+}
+
+func validateGraphEntryPoint(sources map[string]bool) error {
+	if sources[Start] {
+		return nil
+	}
+	return fmt.Errorf("graph must have an entry point: add at least one edge from Start")
+}
+
+func (g *StateGraph[State, Context, Input, Output]) validateKnownTargets(targets map[string]bool) error {
+	for target := range targets {
+		if target != End && g.nodes[target] == nil {
+			return fmt.Errorf("found edge ending at unknown node '%s'", target)
+		}
+	}
+	return nil
+}
+
+func (g *StateGraph[State, Context, Input, Output]) validateInterruptNodes(interrupt []string) error {
+	for _, node := range interrupt {
+		if node == All {
+			continue
+		}
+		if g.nodes[node] == nil {
+			return fmt.Errorf("interrupt node '%s' not found", node)
+		}
+	}
+	return nil
+}
+
 // validateBranchEnds checks that all conditional branch destinations are valid.
 func (g *StateGraph[State, Context, Input, Output]) validateBranchEnds() error {
 	for nodeName, branches := range g.branches {
@@ -630,42 +656,73 @@ func (g *StateGraph[State, Context, Input, Output]) validateBranchEnds() error {
 		if !ok {
 			continue
 		}
+		if err := g.validateNodeBranches(nodeName, node, branches); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-		for _, branch := range branches {
-			if branch.Path == nil {
-				return fmt.Errorf("branch '%s' from '%s' has nil path", branch.Name, nodeName)
-			}
-			// Check each route key in the pathMap
-			for routeKey, dest := range branch.PathMap {
-				if dest == End {
-					continue
-				}
-				// Check if destination is a known node
-				if _, ok := g.nodes[dest]; !ok {
-					return fmt.Errorf("branch from '%s' with route key '%s' targets unknown node '%s'", nodeName, routeKey, dest)
-				}
-				// Check if destination is in node's declared destinations (if any declared)
-				if len(node.Destinations) > 0 {
-					found := false
-					for _, d := range node.Destinations {
-						if d == dest {
-							found = true
-							break
-						}
-					}
-					if !found {
-						return fmt.Errorf("branch from '%s' with route key '%s' targets '%s' which is not in node's destinations", nodeName, routeKey, dest)
-					}
-				}
-			}
-			for _, dest := range branch.Ends {
-				if dest == End {
-					continue
-				}
-				if _, ok := g.nodes[dest]; !ok {
-					return fmt.Errorf("branch '%s' from '%s' targets unknown node '%s'", branch.Name, nodeName, dest)
-				}
-			}
+func (g *StateGraph[State, Context, Input, Output]) validateNodeBranches(
+	nodeName string,
+	node *NodeSpec[State],
+	branches []*BranchSpec[State],
+) error {
+	for _, branch := range branches {
+		if err := g.validateBranchDefinition(nodeName, node, branch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (g *StateGraph[State, Context, Input, Output]) validateBranchDefinition(
+	nodeName string,
+	node *NodeSpec[State],
+	branch *BranchSpec[State],
+) error {
+	if branch.Path == nil {
+		return fmt.Errorf("branch '%s' from '%s' has nil path", branch.Name, nodeName)
+	}
+	if err := g.validateBranchPathMapTargets(nodeName, node, branch.PathMap); err != nil {
+		return err
+	}
+	if err := g.validateBranchEndTargets(nodeName, branch); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (g *StateGraph[State, Context, Input, Output]) validateBranchPathMapTargets(
+	nodeName string,
+	node *NodeSpec[State],
+	pathMap map[string]string,
+) error {
+	for routeKey, destination := range pathMap {
+		if destination == End {
+			continue
+		}
+		if _, ok := g.nodes[destination]; !ok {
+			return fmt.Errorf("branch from '%s' with route key '%s' targets unknown node '%s'", nodeName, routeKey, destination)
+		}
+		if len(node.Destinations) == 0 {
+			continue
+		}
+		if contains(node.Destinations, destination) {
+			continue
+		}
+		return fmt.Errorf("branch from '%s' with route key '%s' targets '%s' which is not in node's destinations", nodeName, routeKey, destination)
+	}
+	return nil
+}
+
+func (g *StateGraph[State, Context, Input, Output]) validateBranchEndTargets(nodeName string, branch *BranchSpec[State]) error {
+	for _, destination := range branch.Ends {
+		if destination == End {
+			continue
+		}
+		if _, ok := g.nodes[destination]; !ok {
+			return fmt.Errorf("branch '%s' from '%s' targets unknown node '%s'", branch.Name, nodeName, destination)
 		}
 	}
 	return nil
@@ -874,17 +931,91 @@ func reducerNameFromTag(field reflect.StructField) string {
 	return ""
 }
 
+type injectedArg int
+
+const (
+	injectConfig injectedArg = iota
+	injectConfigPtr
+	injectWriter
+	injectStore
+	injectRuntime
+	injectRuntimePtr
+)
+
+type wrappedNodeSignature struct {
+	inputSchema any
+	inputType   reflect.Type
+	injected    []injectedArg
+	withContext bool
+}
+
 func wrapNodeFunc[State any](fn any) (Node[State], any, error) {
 	fv := reflect.ValueOf(fn)
 	if !fv.IsValid() || fv.Kind() != reflect.Func {
 		return nil, nil, fmt.Errorf("node function must be a function, got %T", fn)
 	}
 	ft := fv.Type()
-	if ft.NumOut() != 2 || !ft.Out(1).Implements(reflect.TypeOf((*error)(nil)).Elem()) {
-		return nil, nil, fmt.Errorf("node function must return (result, error)")
+	if err := validateWrappedNodeFunctionType(ft); err != nil {
+		return nil, nil, err
 	}
 
+	signature, err := parseWrappedNodeSignature(ft)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	node := func(ctx context.Context, state State) (NodeResult, error) {
+		converted, err := coerceValueToType(any(state), signature.inputType)
+		if err != nil {
+			return NodeResult{}, err
+		}
+		args := buildWrappedNodeCallArgs(ctx, ft, signature, converted)
+		outs := fv.Call(args)
+		if !outs[1].IsNil() {
+			return NodeResult{}, outs[1].Interface().(error)
+		}
+		return coerceWrappedNodeResult(outs[0].Interface()), nil
+	}
+
+	return node, signature.inputSchema, nil
+}
+
+func validateWrappedNodeFunctionType(ft reflect.Type) error {
+	if ft.NumOut() != 2 || !ft.Out(1).Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+		return fmt.Errorf("node function must return (result, error)")
+	}
+	return nil
+}
+
+func parseWrappedNodeSignature(ft reflect.Type) (wrappedNodeSignature, error) {
 	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
+
+	argIndex := 0
+	withContext := false
+	if ft.NumIn() >= 2 && ft.In(0).Implements(contextType) {
+		withContext = true
+		argIndex = 1
+	} else if ft.NumIn() < 1 {
+		return wrappedNodeSignature{}, fmt.Errorf("unsupported node function signature")
+	}
+	if argIndex >= ft.NumIn() {
+		return wrappedNodeSignature{}, fmt.Errorf("node function must have an input argument")
+	}
+
+	inputType := ft.In(argIndex)
+	injected, err := parseInjectedNodeArgs(ft, argIndex+1)
+	if err != nil {
+		return wrappedNodeSignature{}, err
+	}
+	return wrappedNodeSignature{
+		inputType:   inputType,
+		inputSchema: reflect.New(inputType).Elem().Interface(),
+		withContext: withContext,
+		injected:    injected,
+	}, nil
+}
+
+func parseInjectedNodeArgs(ft reflect.Type, start int) ([]injectedArg, error) {
 	configType := reflect.TypeOf(Config{})
 	configPtrType := reflect.TypeOf(&Config{})
 	streamWriterType := reflect.TypeOf(StreamWriter(nil))
@@ -892,183 +1023,184 @@ func wrapNodeFunc[State any](fn any) (Node[State], any, error) {
 	runtimeType := reflect.TypeOf(Runtime{})
 	runtimePtrType := reflect.TypeOf(&Runtime{})
 
-	type injectedArg int
-	const (
-		injectConfig injectedArg = iota
-		injectConfigPtr
-		injectWriter
-		injectStore
-		injectRuntime
-		injectRuntimePtr
-	)
-
-	injected := make([]injectedArg, 0, ft.NumIn())
-	argIndex := 0
-	withContext := false
-	if ft.NumIn() >= 2 && ft.In(0).Implements(contextType) {
-		withContext = true
-		argIndex = 1
-	} else if ft.NumIn() < 1 {
-		return nil, nil, fmt.Errorf("unsupported node function signature")
-	}
-	if argIndex >= ft.NumIn() {
-		return nil, nil, fmt.Errorf("node function must have an input argument")
-	}
-	inputType := ft.In(argIndex)
-	for i := argIndex + 1; i < ft.NumIn(); i++ {
+	out := make([]injectedArg, 0, ft.NumIn())
+	for i := start; i < ft.NumIn(); i++ {
 		argType := ft.In(i)
 		switch argType {
 		case configType:
-			injected = append(injected, injectConfig)
+			out = append(out, injectConfig)
 		case configPtrType:
-			injected = append(injected, injectConfigPtr)
+			out = append(out, injectConfigPtr)
 		case streamWriterType:
-			injected = append(injected, injectWriter)
+			out = append(out, injectWriter)
 		case storeType:
-			injected = append(injected, injectStore)
+			out = append(out, injectStore)
 		case runtimeType:
-			injected = append(injected, injectRuntime)
+			out = append(out, injectRuntime)
 		case runtimePtrType:
-			injected = append(injected, injectRuntimePtr)
+			out = append(out, injectRuntimePtr)
 		default:
-			return nil, nil, fmt.Errorf("unsupported injected parameter type %s", argType)
+			return nil, fmt.Errorf("unsupported injected parameter type %s", argType)
 		}
 	}
-	inputSchema := reflect.New(inputType).Elem().Interface()
+	return out, nil
+}
 
-	node := func(ctx context.Context, state State) (NodeResult, error) {
-		converted, err := coerceValueToType(any(state), inputType)
-		if err != nil {
-			return NodeResult{}, err
-		}
-
-		args := make([]reflect.Value, 0, ft.NumIn())
-		if withContext {
-			args = append(args, reflect.ValueOf(ctx))
-		}
-		args = append(args, converted)
-
-		for _, spec := range injected {
-			switch spec {
-			case injectConfig:
-				args = append(args, reflect.ValueOf(GetConfig(ctx)))
-			case injectConfigPtr:
-				cfg := GetConfig(ctx)
-				args = append(args, reflect.ValueOf(&cfg))
-			case injectWriter:
-				args = append(args, reflect.ValueOf(GetStreamWriter(ctx)))
-			case injectStore:
-				store := GetStore(ctx)
-				if store == nil {
-					args = append(args, reflect.Zero(storeType))
-				} else {
-					args = append(args, reflect.ValueOf(store))
-				}
-			case injectRuntime:
-				rt := GetRuntime(ctx)
-				if rt == nil {
-					args = append(args, reflect.Zero(runtimeType))
-				} else {
-					args = append(args, reflect.ValueOf(*rt))
-				}
-			case injectRuntimePtr:
-				rt := GetRuntime(ctx)
-				if rt == nil {
-					args = append(args, reflect.Zero(runtimePtrType))
-				} else {
-					args = append(args, reflect.ValueOf(rt))
-				}
-			}
-		}
-
-		outs := fv.Call(args)
-		if !outs[1].IsNil() {
-			return NodeResult{}, outs[1].Interface().(error)
-		}
-
-		out := outs[0].Interface()
-		if nr, ok := out.(NodeResult); ok {
-			return nr, nil
-		}
-		if cmd, ok := out.(Command); ok {
-			return NodeCommand(&cmd), nil
-		}
-		if cmd, ok := out.(*Command); ok {
-			return NodeCommand(cmd), nil
-		}
-		return NodeState(Dyn(out)), nil
+func buildWrappedNodeCallArgs(
+	ctx context.Context,
+	ft reflect.Type,
+	signature wrappedNodeSignature,
+	convertedState reflect.Value,
+) []reflect.Value {
+	args := make([]reflect.Value, 0, ft.NumIn())
+	if signature.withContext {
+		args = append(args, reflect.ValueOf(ctx))
 	}
+	args = append(args, convertedState)
+	for _, spec := range signature.injected {
+		args = append(args, wrappedNodeInjectedArgValue(ctx, spec))
+	}
+	return args
+}
 
-	return node, inputSchema, nil
+func wrappedNodeInjectedArgValue(ctx context.Context, spec injectedArg) reflect.Value {
+	storeType := reflect.TypeOf((*Store)(nil)).Elem()
+	runtimeType := reflect.TypeOf(Runtime{})
+	runtimePtrType := reflect.TypeOf(&Runtime{})
+
+	switch spec {
+	case injectConfig:
+		return reflect.ValueOf(GetConfig(ctx))
+	case injectConfigPtr:
+		cfg := GetConfig(ctx)
+		return reflect.ValueOf(&cfg)
+	case injectWriter:
+		return reflect.ValueOf(GetStreamWriter(ctx))
+	case injectStore:
+		store := GetStore(ctx)
+		if store == nil {
+			return reflect.Zero(storeType)
+		}
+		return reflect.ValueOf(store)
+	case injectRuntime:
+		rt := GetRuntime(ctx)
+		if rt == nil {
+			return reflect.Zero(runtimeType)
+		}
+		return reflect.ValueOf(*rt)
+	case injectRuntimePtr:
+		rt := GetRuntime(ctx)
+		if rt == nil {
+			return reflect.Zero(runtimePtrType)
+		}
+		return reflect.ValueOf(rt)
+	default:
+		return reflect.Value{}
+	}
+}
+
+func coerceWrappedNodeResult(out any) NodeResult {
+	if nr, ok := out.(NodeResult); ok {
+		return nr
+	}
+	if cmd, ok := out.(Command); ok {
+		return NodeCommand(&cmd)
+	}
+	if cmd, ok := out.(*Command); ok {
+		return NodeCommand(cmd)
+	}
+	return NodeState(Dyn(out))
 }
 
 func coerceValueToType(value any, target reflect.Type) (reflect.Value, error) {
 	if target.Kind() == reflect.Ptr {
-		inner, err := coerceValueToType(value, target.Elem())
-		if err != nil {
-			return reflect.Value{}, err
-		}
-		ptr := reflect.New(target.Elem())
-		ptr.Elem().Set(inner)
-		return ptr, nil
+		return coerceValueToPointerType(value, target)
 	}
-
 	v := reflect.ValueOf(value)
-	if v.IsValid() {
-		if v.Type().AssignableTo(target) {
-			return v, nil
-		}
-		if v.Type().ConvertibleTo(target) {
-			return v.Convert(target), nil
-		}
+	if direct, ok := coerceDirectValue(v, target); ok {
+		return direct, nil
 	}
-
-	if v.IsValid() && v.Kind() == reflect.Map && target.Kind() == reflect.Struct {
-		if v.Type().Key().Kind() != reflect.String {
-			return reflect.Value{}, fmt.Errorf("cannot convert map key type %s to struct %s", v.Type().Key(), target)
-		}
-		out := reflect.New(target).Elem()
-		for i := 0; i < target.NumField(); i++ {
-			field := target.Field(i)
-			if !field.IsExported() {
-				continue
-			}
-			fieldVal, ok := mapLookupByFieldName(v, field)
-			if !ok {
-				continue
-			}
-			coerced, err := coerceValueToType(fieldVal.Interface(), field.Type)
-			if err != nil {
-				return reflect.Value{}, fmt.Errorf("field '%s': %w", field.Name, err)
-			}
-			out.Field(i).Set(coerced)
-		}
-		return out, nil
+	if mapStruct, ok, err := coerceMapToStructValue(v, target); ok || err != nil {
+		return mapStruct, err
 	}
-
-	if v.IsValid() && v.Kind() == reflect.Struct && target.Kind() == reflect.Struct {
-		out := reflect.New(target).Elem()
-		for i := 0; i < target.NumField(); i++ {
-			field := target.Field(i)
-			if !field.IsExported() {
-				continue
-			}
-			source := v.FieldByName(field.Name)
-			if !source.IsValid() {
-				continue
-			}
-			if source.Type().AssignableTo(field.Type) {
-				out.Field(i).Set(source)
-				continue
-			}
-			if source.Type().ConvertibleTo(field.Type) {
-				out.Field(i).Set(source.Convert(field.Type))
-			}
-		}
-		return out, nil
+	if structStruct, ok := coerceStructToStructValue(v, target); ok {
+		return structStruct, nil
 	}
-
 	return reflect.Value{}, fmt.Errorf("cannot convert %T to %s", value, target)
+}
+
+func coerceValueToPointerType(value any, target reflect.Type) (reflect.Value, error) {
+	inner, err := coerceValueToType(value, target.Elem())
+	if err != nil {
+		return reflect.Value{}, err
+	}
+	ptr := reflect.New(target.Elem())
+	ptr.Elem().Set(inner)
+	return ptr, nil
+}
+
+func coerceDirectValue(value reflect.Value, target reflect.Type) (reflect.Value, bool) {
+	if !value.IsValid() {
+		return reflect.Value{}, false
+	}
+	if value.Type().AssignableTo(target) {
+		return value, true
+	}
+	if value.Type().ConvertibleTo(target) {
+		return value.Convert(target), true
+	}
+	return reflect.Value{}, false
+}
+
+func coerceMapToStructValue(value reflect.Value, target reflect.Type) (reflect.Value, bool, error) {
+	if !value.IsValid() || value.Kind() != reflect.Map || target.Kind() != reflect.Struct {
+		return reflect.Value{}, false, nil
+	}
+	if value.Type().Key().Kind() != reflect.String {
+		return reflect.Value{}, true, fmt.Errorf("cannot convert map key type %s to struct %s", value.Type().Key(), target)
+	}
+	out := reflect.New(target).Elem()
+	for i := 0; i < target.NumField(); i++ {
+		field := target.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		fieldVal, ok := mapLookupByFieldName(value, field)
+		if !ok {
+			continue
+		}
+		coerced, err := coerceValueToType(fieldVal.Interface(), field.Type)
+		if err != nil {
+			return reflect.Value{}, true, fmt.Errorf("field '%s': %w", field.Name, err)
+		}
+		out.Field(i).Set(coerced)
+	}
+	return out, true, nil
+}
+
+func coerceStructToStructValue(value reflect.Value, target reflect.Type) (reflect.Value, bool) {
+	if !value.IsValid() || value.Kind() != reflect.Struct || target.Kind() != reflect.Struct {
+		return reflect.Value{}, false
+	}
+	out := reflect.New(target).Elem()
+	for i := 0; i < target.NumField(); i++ {
+		field := target.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		source := value.FieldByName(field.Name)
+		if !source.IsValid() {
+			continue
+		}
+		if source.Type().AssignableTo(field.Type) {
+			out.Field(i).Set(source)
+			continue
+		}
+		if source.Type().ConvertibleTo(field.Type) {
+			out.Field(i).Set(source.Convert(field.Type))
+		}
+	}
+	return out, true
 }
 
 func mapLookupByFieldName(v reflect.Value, field reflect.StructField) (reflect.Value, bool) {

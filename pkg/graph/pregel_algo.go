@@ -38,194 +38,255 @@ func prepareNextTasks[State, Context, Input, Output any](
 	step int,
 	allowDeferred bool,
 ) ([]pregelTask[State], error) {
-	var tasks []pregelTask[State]
+	tasks := collectPushTasksFromChannel(g, config, channels, pendingWrites, step)
+	pullCandidates, branchSends, branchSources, err := pullCandidatesFromTopology(ctx, g, channels, prevNodes, step)
+	if err != nil {
+		return nil, err
+	}
+	tasks = append(tasks, branchSendTasks(g, config, pendingWrites, step, branchSends, len(tasks))...)
+	pullTasks, err := buildPullTasks(g, config, channels, pendingWrites, step, allowDeferred, pullCandidates, branchSources)
+	if err != nil {
+		return nil, err
+	}
+	tasks = append(tasks, pullTasks...)
+	return tasks, nil
+}
 
-	// --- 1. PUSH tasks from the TASKS channel ---
-	// The pregelTasks Topic channel accumulates Send objects written by the
-	// previous superstep. Each Send{Node, Arg} becomes an independent push
-	// task whose input is Arg — not the shared graph state.
-	if pushCh, ok := channels.channels[pregelTasks]; ok && pushCh.IsAvailable() {
-		raw, err := pushCh.Get()
-		if err == nil {
-			if sends, ok := raw.Value().([]Dynamic); ok {
-				for idx, item := range sends {
-					switch packet := item.Value().(type) {
-					case Send:
-						if packet.Node == "" || packet.Node == End {
-							continue
-						}
-						path := []any{"push", idx}
-						task := pregelTask[State]{
-							name:     packet.Node,
-							path:     path,
-							input:    packet.Arg.Value(),
-							isPush:   true,
-							triggers: []string{pregelTasks},
-						}
-						setTaskNodeMetadata(g, &task)
-						task.id = pregelTaskID(config, step, task.path, task.name, task.triggers)
-						task.checkpointNS = taskCheckpointNamespace(config.CheckpointNS, task.name, task.id)
-						task.resumeValues = taskResumeValues(pendingWrites, task.id)
-						if key, ok := buildNodeCacheKey(g.nodes[task.name], task, config); ok {
-							task.cacheKey = &key
-						}
-						tasks = append(tasks, task)
-					case Call:
-						if packet.Fn == nil {
-							continue
-						}
-						name := packet.Name
-						if name == "" {
-							name = "call"
-						}
-						path := []any{"push", idx, "call", name}
-						call := packet
-						task := pregelTask[State]{
-							name:     name,
-							path:     path,
-							input:    packet.Arg.Value(),
-							isPush:   true,
-							triggers: []string{pregelTasks},
-							call:     &call,
-						}
-						task.id = pregelTaskID(config, step, task.path, task.name, task.triggers)
-						task.checkpointNS = taskCheckpointNamespace(config.CheckpointNS, task.name, task.id)
-						task.resumeValues = taskResumeValues(pendingWrites, task.id)
-						if key, ok := buildCallCacheKey(task, config); ok {
-							task.cacheKey = &key
-						}
-						tasks = append(tasks, task)
-					}
-				}
-			}
+func collectPushTasksFromChannel[State, Context, Input, Output any](
+	g *StateGraph[State, Context, Input, Output],
+	config Config,
+	channels *pregelChannelMap,
+	pendingWrites []checkpoint.PendingWrite,
+	step int,
+) []pregelTask[State] {
+	pushChannel, ok := channels.channels[pregelTasks]
+	if !ok || !pushChannel.IsAvailable() {
+		return nil
+	}
+	raw, err := pushChannel.Get()
+	if err != nil {
+		return nil
+	}
+	items, ok := raw.Value().([]Dynamic)
+	if !ok {
+		return nil
+	}
+	tasks := make([]pregelTask[State], 0, len(items))
+	for idx, item := range items {
+		if task, taskOK := pushPacketTask(g, config, pendingWrites, step, idx, item); taskOK {
+			tasks = append(tasks, task)
 		}
 	}
+	return tasks
+}
 
-	// --- 2. PULL candidates from graph topology ---
-	var pullCandidates []string
-	var branchSends []Send // Sends returned directly by branch functions.
-	branchSources := make(map[string][]string)
+func pushPacketTask[State, Context, Input, Output any](
+	g *StateGraph[State, Context, Input, Output],
+	config Config,
+	pendingWrites []checkpoint.PendingWrite,
+	step int,
+	idx int,
+	packet Dynamic,
+) (pregelTask[State], bool) {
+	switch item := packet.Value().(type) {
+	case Send:
+		if item.Node == "" || item.Node == End {
+			return pregelTask[State]{}, false
+		}
+		task := pregelTask[State]{name: item.Node, path: []any{"push", idx}, input: item.Arg.Value(), isPush: true, triggers: []string{pregelTasks}}
+		setTaskNodeMetadata(g, &task)
+		finalizeNodeTask(config, pendingWrites, step, g.nodes[task.name], &task)
+		return task, true
+	case Call:
+		if item.Fn == nil {
+			return pregelTask[State]{}, false
+		}
+		name := item.Name
+		if name == "" {
+			name = "call"
+		}
+		call := item
+		task := pregelTask[State]{name: name, path: []any{"push", idx, "call", name}, input: item.Arg.Value(), isPush: true, triggers: []string{pregelTasks}, call: &call}
+		finalizeCallTask(config, pendingWrites, step, &task)
+		return task, true
+	default:
+		return pregelTask[State]{}, false
+	}
+}
 
+func pullCandidatesFromTopology[State, Context, Input, Output any](
+	ctx context.Context,
+	g *StateGraph[State, Context, Input, Output],
+	channels *pregelChannelMap,
+	prevNodes []string,
+	step int,
+) (pullCandidates []string, branchSends []Send, branchSources map[string][]string, err error) {
 	if step == 0 {
-		pullCandidates = entryNodes(g)
-	} else {
-		seen := make(map[string]bool)
-		for _, nodeName := range prevNodes {
-			// Direct edges.
-			for _, edge := range g.edges {
-				if edge.Source == nodeName && edge.Target != End && !seen[edge.Target] {
-					pullCandidates = append(pullCandidates, edge.Target)
-					seen[edge.Target] = true
-				}
-			}
-			// Conditional branches.
-			if branches, ok := g.branches[nodeName]; ok {
-				for _, branch := range branches {
-					state, err := stateFromChannels[State](channels)
-					if err != nil {
-						return nil, fmt.Errorf("reading state for branch '%s': %w", branch.Name, err)
-					}
-					result, err := branch.Path(ctx, state)
-					if err != nil {
-						return nil, fmt.Errorf("branch '%s': %w", branch.Name, err)
-					}
-					strs, sends, err := routingTargetsBoth(result, branch.PathMap)
-					if err != nil {
-						return nil, fmt.Errorf("branch '%s' returned invalid route type: %w", branch.Name, err)
-					}
-					for _, t := range strs {
-						if !seen[t] {
-							pullCandidates = append(pullCandidates, t)
-							seen[t] = true
-						}
-						if !containsString(branchSources[t], nodeName) {
-							branchSources[t] = append(branchSources[t], nodeName)
-						}
-					}
-					branchSends = append(branchSends, sends...)
-				}
-			}
-		}
-
-		for _, we := range g.waitingEdges {
-			if we.Target == End {
-				continue
-			}
-			joinChannel := waitingEdgeChannelName(we)
-			join, ok := channels.channels[joinChannel]
-			if seen[we.Target] {
-				continue
-			}
-			if ok {
-				if !join.IsAvailable() {
-					continue
-				}
-			} else if !allSourcesCompleted(g, we.Sources, prevNodes) {
-				// Fallback for cases where waiting-edge channels are unavailable
-				// (for example, partial/manual channel maps in tests or tooling).
-				continue
-			}
-			pullCandidates = append(pullCandidates, we.Target)
-			seen[we.Target] = true
-		}
+		return entryNodes(g), nil, map[string][]string{}, nil
 	}
+	seen := make(map[string]bool)
+	candidates := make([]string, 0)
+	branchSends = make([]Send, 0)
+	branchSources = make(map[string][]string)
+	for _, nodeName := range prevNodes {
+		candidates = appendDirectEdgeCandidates(g, nodeName, seen, candidates)
+		nextCandidates, sends, branchErr := appendConditionalBranchCandidates(ctx, g, channels, nodeName, seen, branchSources)
+		if branchErr != nil {
+			return nil, nil, nil, branchErr
+		}
+		candidates = append(candidates, nextCandidates...)
+		branchSends = append(branchSends, sends...)
+	}
+	candidates = appendWaitingEdgeCandidates(g, channels, prevNodes, seen, candidates)
+	return candidates, branchSends, branchSources, nil
+}
 
-	// PUSH tasks from branch-returned Send objects.
-	for _, s := range branchSends {
+func appendDirectEdgeCandidates[State, Context, Input, Output any](g *StateGraph[State, Context, Input, Output], nodeName string, seen map[string]bool, out []string) []string {
+	for _, edge := range g.edges {
+		if edge.Source != nodeName || edge.Target == End || seen[edge.Target] {
+			continue
+		}
+		out = append(out, edge.Target)
+		seen[edge.Target] = true
+	}
+	return out
+}
+
+func appendConditionalBranchCandidates[State, Context, Input, Output any](
+	ctx context.Context,
+	g *StateGraph[State, Context, Input, Output],
+	channels *pregelChannelMap,
+	nodeName string,
+	seen map[string]bool,
+	branchSources map[string][]string,
+) ([]string, []Send, error) {
+	branches, ok := g.branches[nodeName]
+	if !ok {
+		return nil, nil, nil
+	}
+	candidates := make([]string, 0)
+	branchSends := make([]Send, 0)
+	for _, branch := range branches {
+		state, err := stateFromChannels[State](channels)
+		if err != nil {
+			return nil, nil, fmt.Errorf("reading state for branch '%s': %w", branch.Name, err)
+		}
+		result, err := branch.Path(ctx, state)
+		if err != nil {
+			return nil, nil, fmt.Errorf("branch '%s': %w", branch.Name, err)
+		}
+		strs, sends, err := routingTargetsBoth(result, branch.PathMap)
+		if err != nil {
+			return nil, nil, fmt.Errorf("branch '%s' returned invalid route type: %w", branch.Name, err)
+		}
+		for _, target := range strs {
+			if !seen[target] {
+				candidates = append(candidates, target)
+				seen[target] = true
+			}
+			if !containsString(branchSources[target], nodeName) {
+				branchSources[target] = append(branchSources[target], nodeName)
+			}
+		}
+		branchSends = append(branchSends, sends...)
+	}
+	return candidates, branchSends, nil
+}
+
+func appendWaitingEdgeCandidates[State, Context, Input, Output any](
+	g *StateGraph[State, Context, Input, Output],
+	channels *pregelChannelMap,
+	prevNodes []string,
+	seen map[string]bool,
+	out []string,
+) []string {
+	for _, waiting := range g.waitingEdges {
+		if waiting.Target == End || seen[waiting.Target] {
+			continue
+		}
+		joinChannel := waitingEdgeChannelName(waiting)
+		join, ok := channels.channels[joinChannel]
+		if ok {
+			if !join.IsAvailable() {
+				continue
+			}
+		} else if !allSourcesCompleted(g, waiting.Sources, prevNodes) {
+			continue
+		}
+		out = append(out, waiting.Target)
+		seen[waiting.Target] = true
+	}
+	return out
+}
+
+func branchSendTasks[State, Context, Input, Output any](
+	g *StateGraph[State, Context, Input, Output],
+	config Config,
+	pendingWrites []checkpoint.PendingWrite,
+	step int,
+	sends []Send,
+	baseOffset int,
+) []pregelTask[State] {
+	tasks := make([]pregelTask[State], 0, len(sends))
+	for i, s := range sends {
 		if s.Node == "" || s.Node == End {
 			continue
 		}
-		path := []any{"push", "branch", s.Node, len(tasks)}
-		task := pregelTask[State]{
-			name:     s.Node,
-			path:     path,
-			input:    s.Arg.Value(),
-			isPush:   true,
-			triggers: []string{"branch"},
-		}
+		task := pregelTask[State]{name: s.Node, path: []any{"push", "branch", s.Node, baseOffset + i}, input: s.Arg.Value(), isPush: true, triggers: []string{"branch"}}
 		setTaskNodeMetadata(g, &task)
-		task.id = pregelTaskID(config, step, task.path, task.name, task.triggers)
-		task.checkpointNS = taskCheckpointNamespace(config.CheckpointNS, task.name, task.id)
-		task.resumeValues = taskResumeValues(pendingWrites, task.id)
-		if key, ok := buildNodeCacheKey(g.nodes[task.name], task, config); ok {
-			task.cacheKey = &key
-		}
+		finalizeNodeTask(config, pendingWrites, step, g.nodes[task.name], &task)
 		tasks = append(tasks, task)
 	}
+	return tasks
+}
 
-	// PULL tasks: one per candidate node, input is current graph state.
-	for _, name := range pullCandidates {
-		if g.nodes[name] == nil {
+func buildPullTasks[State, Context, Input, Output any](
+	g *StateGraph[State, Context, Input, Output],
+	config Config,
+	channels *pregelChannelMap,
+	pendingWrites []checkpoint.PendingWrite,
+	step int,
+	allowDeferred bool,
+	candidates []string,
+	branchSources map[string][]string,
+) ([]pregelTask[State], error) {
+	tasks := make([]pregelTask[State], 0, len(candidates))
+	for _, name := range candidates {
+		node := g.nodes[name]
+		if node == nil {
 			return nil, fmt.Errorf("node '%s' referenced but not found in graph", name)
 		}
-
-		// Check if node has defer flag - if so, skip scheduling it this step
-		if node := g.nodes[name]; node != nil && node.Defer && !allowDeferred {
+		if node.Defer && !allowDeferred {
 			continue
 		}
-
 		state, err := stateFromChannels[State](channels)
 		if err != nil {
 			return nil, fmt.Errorf("reading state for node '%s': %w", name, err)
 		}
-		triggers := triggerChannels(g, name, branchSources[name])
-		task := pregelTask[State]{
-			name:     name,
-			path:     []any{"pull", name},
-			triggers: triggers,
-			input:    state,
-		}
+		task := pregelTask[State]{name: name, path: []any{"pull", name}, triggers: triggerChannels(g, name, branchSources[name]), input: state}
 		setTaskNodeMetadata(g, &task)
-		task.id = pregelTaskID(config, step, task.path, task.name, task.triggers)
-		task.checkpointNS = taskCheckpointNamespace(config.CheckpointNS, task.name, task.id)
-		task.resumeValues = taskResumeValues(pendingWrites, task.id)
-		if key, ok := buildNodeCacheKey(g.nodes[task.name], task, config); ok {
-			task.cacheKey = &key
-		}
+		finalizeNodeTask(config, pendingWrites, step, node, &task)
 		tasks = append(tasks, task)
 	}
-
 	return tasks, nil
+}
+
+func finalizeNodeTask[State any](config Config, pendingWrites []checkpoint.PendingWrite, step int, node *NodeSpec[State], task *pregelTask[State]) {
+	task.id = pregelTaskID(config, step, task.path, task.name, task.triggers)
+	task.checkpointNS = taskCheckpointNamespace(config.CheckpointNS, task.name, task.id)
+	task.resumeValues = taskResumeValues(pendingWrites, task.id)
+	if key, ok := buildNodeCacheKey(node, *task, config); ok {
+		task.cacheKey = &key
+	}
+}
+
+func finalizeCallTask[State any](config Config, pendingWrites []checkpoint.PendingWrite, step int, task *pregelTask[State]) {
+	task.id = pregelTaskID(config, step, task.path, task.name, task.triggers)
+	task.checkpointNS = taskCheckpointNamespace(config.CheckpointNS, task.name, task.id)
+	task.resumeValues = taskResumeValues(pendingWrites, task.id)
+	if key, ok := buildCallCacheKey(*task, config); ok {
+		task.cacheKey = &key
+	}
 }
 
 func setTaskNodeMetadata[State, Context, Input, Output any](g *StateGraph[State, Context, Input, Output], task *pregelTask[State]) {
@@ -399,162 +460,235 @@ func applyTaskWrites[State, Context, Input, Output any](
 	results []pregelTaskResult,
 	interrupts []Interrupt,
 	allowDynamicChannels bool,
-) ([]Interrupt, map[string]bool, map[string]bool, error) {
-	versionBumped := make(map[string]bool)
-	updatedChannels := make(map[string]bool)
+) (nextInterrupts []Interrupt, versionBumped, updatedChannels map[string]bool, err error) {
+	versionBumped = make(map[string]bool)
+	updatedChannels = make(map[string]bool)
 
 	if len(results) == 0 {
 		return interrupts, versionBumped, updatedChannels, nil
 	}
-
-	taskByID := make(map[string]pregelTask[State], len(tasks))
-	for _, task := range tasks {
-		taskByID[task.id] = task
+	taskByID := taskIndexByID(tasks)
+	orderedResults := orderedTaskResults(results, taskByID)
+	waitingBySource := waitingEdgesBySource(g)
+	collected := collectStepWrites(channels, orderedResults, taskByID, waitingBySource, interrupts, allowDynamicChannels)
+	interrupts = collected.interrupts
+	for channel := range applyConsumedChannels(channels, collected.consumed) {
+		versionBumped[channel] = true
 	}
-	orderedResults := append([]pregelTaskResult(nil), results...)
-	sort.SliceStable(orderedResults, func(i, j int) bool {
-		leftPath := orderedResults[i].path
-		if task, ok := taskByID[orderedResults[i].taskID]; ok {
+	changed, applyErr := channels.applyBatch(collected.explicitWrites)
+	if applyErr != nil {
+		return interrupts, versionBumped, updatedChannels, applyErr
+	}
+	updateChangedChannels(channels, changed, versionBumped, updatedChannels)
+	if updateErr := applyEmptyStepUpdates(channels, collected.bumpStep, collected.written, versionBumped, updatedChannels); updateErr != nil {
+		return interrupts, versionBumped, updatedChannels, updateErr
+	}
+
+	return interrupts, versionBumped, updatedChannels, nil
+}
+
+type stepWriteCollection struct {
+	consumed       map[string]struct{}
+	written        map[string]bool
+	explicitWrites []pregelWrite
+	interrupts     []Interrupt
+	bumpStep       bool
+}
+
+func taskIndexByID[State any](tasks []pregelTask[State]) map[string]pregelTask[State] {
+	out := make(map[string]pregelTask[State], len(tasks))
+	for _, task := range tasks {
+		out[task.id] = task
+	}
+	return out
+}
+
+func orderedTaskResults[State any](results []pregelTaskResult, taskByID map[string]pregelTask[State]) []pregelTaskResult {
+	ordered := append([]pregelTaskResult(nil), results...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		leftPath := ordered[i].path
+		if task, ok := taskByID[ordered[i].taskID]; ok {
 			leftPath = task.path
 		}
-		rightPath := orderedResults[j].path
-		if task, ok := taskByID[orderedResults[j].taskID]; ok {
+		rightPath := ordered[j].path
+		if task, ok := taskByID[ordered[j].taskID]; ok {
 			rightPath = task.path
 		}
 		leftKey := taskPathSortKey(leftPath)
 		rightKey := taskPathSortKey(rightPath)
 		if leftKey == rightKey {
-			return orderedResults[i].taskID < orderedResults[j].taskID
+			return ordered[i].taskID < ordered[j].taskID
 		}
 		return leftKey < rightKey
 	})
+	return ordered
+}
 
-	waitingBySource := make(map[string][]WaitingEdge)
-	if g != nil {
-		for _, we := range g.waitingEdges {
-			if we.Target == End {
-				continue
-			}
-			for _, src := range we.Sources {
-				waitingBySource[src] = append(waitingBySource[src], we)
-			}
-		}
+func waitingEdgesBySource[State, Context, Input, Output any](g *StateGraph[State, Context, Input, Output]) map[string][]WaitingEdge {
+	out := make(map[string][]WaitingEdge)
+	if g == nil {
+		return out
 	}
-
-	bumpStep := false
-	consumed := make(map[string]struct{})
-	explicitWrites := make([]pregelWrite, 0)
-	written := make(map[string]bool)
-
-	for _, result := range orderedResults {
-		task, ok := taskByID[result.taskID]
-		if ok && len(task.triggers) > 0 {
-			bumpStep = true
-		}
-
-		for _, trigger := range task.triggers {
-			if isInternalPregelChannel(trigger) {
-				continue
-			}
-			if _, exists := channels.channels[trigger]; !exists {
-				continue
-			}
-			if _, seen := consumed[trigger]; seen {
-				continue
-			}
-			consumed[trigger] = struct{}{}
-		}
-
-		for _, write := range result.writes {
-			switch write.channel {
-			case pregelInterrupt:
-				if iv, ok := write.value.(Interrupt); ok && !containsString(result.tags, TagHidden) {
-					interrupts = append(interrupts, iv)
-				}
-				continue
-			case pregelResume, pregelError:
-				continue
-			}
-
-			if _, exists := channels.channels[write.channel]; !exists {
-				if !allowDynamicChannels {
-					continue
-				}
-				channels.channels[write.channel] = NewLastValue()
-			}
-			explicitWrites = append(explicitWrites, write)
-			written[write.channel] = true
-		}
-
-		if !ok || result.err != nil || len(result.interrupts) > 0 {
+	for _, waiting := range g.waitingEdges {
+		if waiting.Target == End {
 			continue
 		}
-		if waits := waitingBySource[result.node]; len(waits) > 0 {
-			seenJoinChannels := make(map[string]struct{}, len(waits))
-			for _, we := range waits {
-				joinChannel := waitingEdgeChannelName(we)
-				if _, dup := seenJoinChannels[joinChannel]; dup {
-					continue
-				}
-				seenJoinChannels[joinChannel] = struct{}{}
-				if _, exists := channels.channels[joinChannel]; !exists {
-					continue
-				}
-				explicitWrites = append(explicitWrites, pregelWrite{channel: joinChannel, value: result.node})
-				written[joinChannel] = true
-			}
+		for _, src := range waiting.Sources {
+			out[src] = append(out[src], waiting)
 		}
 	}
+	return out
+}
 
+func collectStepWrites[State any](
+	channels *pregelChannelMap,
+	results []pregelTaskResult,
+	taskByID map[string]pregelTask[State],
+	waitingBySource map[string][]WaitingEdge,
+	interrupts []Interrupt,
+	allowDynamicChannels bool,
+) stepWriteCollection {
+	collected := stepWriteCollection{
+		consumed:       make(map[string]struct{}),
+		explicitWrites: make([]pregelWrite, 0),
+		written:        make(map[string]bool),
+		interrupts:     interrupts,
+	}
+	for _, result := range results {
+		task, ok := taskByID[result.taskID]
+		if ok && len(task.triggers) > 0 {
+			collected.bumpStep = true
+		}
+		collectConsumedChannels(channels, task.triggers, collected.consumed)
+		collected.explicitWrites, collected.interrupts = collectExplicitWrites(channels, result, allowDynamicChannels, collected.explicitWrites, collected.written, collected.interrupts)
+		collected.explicitWrites = addWaitingEdgeWrites(channels, waitingBySource, result, ok, collected.explicitWrites, collected.written)
+	}
+	return collected
+}
+
+func collectConsumedChannels(channels *pregelChannelMap, triggers []string, consumed map[string]struct{}) {
+	for _, trigger := range triggers {
+		if isInternalPregelChannel(trigger) {
+			continue
+		}
+		if _, exists := channels.channels[trigger]; !exists {
+			continue
+		}
+		if _, seen := consumed[trigger]; seen {
+			continue
+		}
+		consumed[trigger] = struct{}{}
+	}
+}
+
+func collectExplicitWrites(
+	channels *pregelChannelMap,
+	result pregelTaskResult,
+	allowDynamicChannels bool,
+	existing []pregelWrite,
+	written map[string]bool,
+	interrupts []Interrupt,
+) ([]pregelWrite, []Interrupt) {
+	for _, write := range result.writes {
+		switch write.channel {
+		case pregelInterrupt:
+			if iv, ok := write.value.(Interrupt); ok && !containsString(result.tags, TagHidden) {
+				interrupts = append(interrupts, iv)
+			}
+			continue
+		case pregelResume, pregelError:
+			continue
+		}
+		if _, exists := channels.channels[write.channel]; !exists {
+			if !allowDynamicChannels {
+				continue
+			}
+			channels.channels[write.channel] = NewLastValue()
+		}
+		existing = append(existing, write)
+		written[write.channel] = true
+	}
+	return existing, interrupts
+}
+
+func addWaitingEdgeWrites(
+	channels *pregelChannelMap,
+	waitingBySource map[string][]WaitingEdge,
+	result pregelTaskResult,
+	taskExists bool,
+	existing []pregelWrite,
+	written map[string]bool,
+) []pregelWrite {
+	if !taskExists || result.err != nil || len(result.interrupts) > 0 {
+		return existing
+	}
+	waits := waitingBySource[result.node]
+	if len(waits) == 0 {
+		return existing
+	}
+	seenJoinChannels := make(map[string]struct{}, len(waits))
+	for _, waiting := range waits {
+		joinChannel := waitingEdgeChannelName(waiting)
+		if _, dup := seenJoinChannels[joinChannel]; dup {
+			continue
+		}
+		seenJoinChannels[joinChannel] = struct{}{}
+		if _, exists := channels.channels[joinChannel]; !exists {
+			continue
+		}
+		existing = append(existing, pregelWrite{channel: joinChannel, value: result.node})
+		written[joinChannel] = true
+	}
+	return existing
+}
+
+func applyConsumedChannels(channels *pregelChannelMap, consumed map[string]struct{}) map[string]bool {
 	consumeOrder := make([]string, 0, len(consumed))
 	for channel := range consumed {
 		consumeOrder = append(consumeOrder, channel)
 	}
 	sort.Strings(consumeOrder)
-	for channel := range channels.consumeChannels(consumeOrder) {
-		versionBumped[channel] = true
-	}
+	return channels.consumeChannels(consumeOrder)
+}
 
-	changed, err := channels.applyBatch(explicitWrites)
-	if err != nil {
-		return interrupts, versionBumped, updatedChannels, err
-	}
+func updateChangedChannels(channels *pregelChannelMap, changed, versionBumped, updatedChannels map[string]bool) {
 	for channel := range changed {
 		versionBumped[channel] = true
 		if channels.channels[channel].IsAvailable() {
 			updatedChannels[channel] = true
 		}
 	}
+}
 
-	if bumpStep {
-		allChannels := make([]string, 0, len(channels.channels))
-		for channel := range channels.channels {
-			allChannels = append(allChannels, channel)
+func applyEmptyStepUpdates(channels *pregelChannelMap, bumpStep bool, written, versionBumped, updatedChannels map[string]bool) error {
+	if !bumpStep {
+		return nil
+	}
+	allChannels := make([]string, 0, len(channels.channels))
+	for channel := range channels.channels {
+		allChannels = append(allChannels, channel)
+	}
+	sort.Strings(allChannels)
+	for _, channel := range allChannels {
+		if written[channel] {
+			continue
 		}
-		sort.Strings(allChannels)
-
-		for _, channel := range allChannels {
-			if written[channel] {
-				continue
-			}
-			ch := channels.channels[channel]
-			if !ch.IsAvailable() {
-				continue
-			}
-			changed, err := ch.Update(nil)
-			if err != nil {
-				return interrupts, versionBumped, updatedChannels, err
-			}
-			if changed {
-				versionBumped[channel] = true
-				if ch.IsAvailable() {
-					updatedChannels[channel] = true
-				}
+		ch := channels.channels[channel]
+		if !ch.IsAvailable() {
+			continue
+		}
+		changed, err := ch.Update(nil)
+		if err != nil {
+			return err
+		}
+		if changed {
+			versionBumped[channel] = true
+			if ch.IsAvailable() {
+				updatedChannels[channel] = true
 			}
 		}
 	}
-
-	return interrupts, versionBumped, updatedChannels, nil
+	return nil
 }
 
 func taskPathSortKey(path []any) string {
@@ -666,62 +800,84 @@ func shouldInterruptAfter(results []pregelTaskResult, interruptAfter []string) b
 func stateFromChannels[State any](channels *pregelChannelMap) (State, error) {
 	var zero State
 
-	// map[string]any: build map from available channel values.
-	if _, ok := any(zero).(map[string]any); ok {
-		stateMap := channels.toStateMap()
-		for channel := range stateMap {
-			if isInternalPregelChannel(channel) || strings.HasPrefix(channel, "join:") {
-				delete(stateMap, channel)
-			}
-		}
-		if s, ok := any(stateMap).(State); ok {
-			return s, nil
-		}
+	if state, ok := stateFromMapChannels[State](channels, zero); ok {
+		return state, nil
 	}
-
-	// Struct reflection: populate each exported field from its named channel.
-	rt := reflect.TypeOf(zero)
-	if rt != nil && rt.Kind() == reflect.Struct {
-		result := reflect.New(rt).Elem()
-		for i := 0; i < rt.NumField(); i++ {
-			f := rt.Field(i)
-			if !f.IsExported() {
-				continue
-			}
-			ch, ok := channels.channels[f.Name]
-			if !ok {
-				continue
-			}
-			val, err := ch.Get()
-			if err != nil {
-				// EmptyChannelError — leave field at zero value.
-				continue
-			}
-			fv := result.Field(i)
-			rv := reflect.ValueOf(val.Value())
-			if !rv.IsValid() {
-				continue
-			}
-			if rv.Type().AssignableTo(fv.Type()) {
-				fv.Set(rv)
-			} else if rv.Type().ConvertibleTo(fv.Type()) {
-				fv.Set(rv.Convert(fv.Type()))
-			}
-		}
-		if s, ok := result.Interface().(State); ok {
-			return s, nil
-		}
+	if state, ok := stateFromStructChannels[State](channels, zero); ok {
+		return state, nil
 	}
-
-	// Fall-through: try to read from the __input__ channel for opaque/scalar State.
-	if ch, ok := channels.channels[pregelInput]; ok {
-		val, err := ch.Get()
-		if err == nil {
-			if s, ok := val.Value().(State); ok {
-				return s, nil
-			}
-		}
+	if state, ok := stateFromInputChannel[State](channels); ok {
+		return state, nil
 	}
-
 	return zero, nil
+}
+
+func stateFromMapChannels[State any](channels *pregelChannelMap, zero State) (State, bool) {
+	if _, ok := any(zero).(map[string]any); !ok {
+		var none State
+		return none, false
+	}
+	stateMap := channels.toStateMap()
+	for channel := range stateMap {
+		if isInternalPregelChannel(channel) || strings.HasPrefix(channel, "join:") {
+			delete(stateMap, channel)
+		}
+	}
+	state, ok := any(stateMap).(State)
+	return state, ok
+}
+
+func stateFromStructChannels[State any](channels *pregelChannelMap, zero State) (State, bool) {
+	rt := reflect.TypeOf(zero)
+	if rt == nil || rt.Kind() != reflect.Struct {
+		var none State
+		return none, false
+	}
+	result := reflect.New(rt).Elem()
+	for i := 0; i < rt.NumField(); i++ {
+		field := rt.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		channel, ok := channels.channels[field.Name]
+		if !ok {
+			continue
+		}
+		value, err := channel.Get()
+		if err != nil {
+			continue
+		}
+		setStructFieldFromChannelValue(result.Field(i), value.Value())
+	}
+	state, ok := result.Interface().(State)
+	return state, ok
+}
+
+func setStructFieldFromChannelValue(field reflect.Value, raw any) {
+	rv := reflect.ValueOf(raw)
+	if !rv.IsValid() {
+		return
+	}
+	if rv.Type().AssignableTo(field.Type()) {
+		field.Set(rv)
+		return
+	}
+	if rv.Type().ConvertibleTo(field.Type()) {
+		field.Set(rv.Convert(field.Type()))
+	}
+}
+
+func stateFromInputChannel[State any](channels *pregelChannelMap) (State, bool) {
+	channel, ok := channels.channels[pregelInput]
+	if !ok {
+		var none State
+		return none, false
+	}
+	value, err := channel.Get()
+	if err != nil {
+		var none State
+		return none, false
+	}
+	state, ok := value.Value().(State)
+	return state, ok
 }

@@ -214,6 +214,30 @@ func TestStateGraph_AddNodeFuncInjectsConfigPointer(t *testing.T) {
 	}
 }
 
+func TestStateGraph_AddNodeFuncRejectsUnsupportedInjectedParameter(t *testing.T) {
+	g := NewStateGraph[map[string]any]()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for unsupported injected parameter type")
+		}
+		msg := ""
+		switch typed := r.(type) {
+		case string:
+			msg = typed
+		case error:
+			msg = typed.Error()
+		}
+		if !strings.Contains(msg, "unsupported injected parameter type") {
+			t.Fatalf("panic = %q, want unsupported injected parameter type", msg)
+		}
+	}()
+
+	g.AddNodeFunc("bad", func(_ context.Context, _ map[string]any, _ int) (NodeResult, error) {
+		return NoNodeResult(), nil
+	})
+}
+
 func TestStateGraph_AddConditionalEdgesDynamicSupportsStringAndSlicePathMap(t *testing.T) {
 	g := NewStateGraph[map[string]any]()
 	g.AddNode("router", func(_ context.Context, _ map[string]any) (NodeResult, error) {

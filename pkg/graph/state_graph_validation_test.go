@@ -144,6 +144,47 @@ func TestStateGraph_ValidateRejectsUnknownDeclaredDestinations(t *testing.T) {
 	}
 }
 
+func TestStateGraph_ValidateRejectsBranchTargetOutsideDeclaredDestinations(t *testing.T) {
+	g := NewStateGraph[map[string]any]()
+	g.AddNode("router", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		return NoNodeResult(), nil
+	})
+	g.AddNode("left", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
+	g.AddNode("right", func(_ context.Context, _ map[string]any) (NodeResult, error) { return NoNodeResult(), nil })
+	g.AddEdge(Start, "router")
+	g.AddEdge("left", End)
+	g.AddEdge("right", End)
+	g.AddConditionalEdges("router", func(_ context.Context, _ map[string]any) (Route, error) {
+		return RouteTo("right"), nil
+	}, map[string]string{"right": "right"})
+
+	// Force a mismatch between declared destinations and branch mapping.
+	g.nodes["router"].Destinations = []string{"left"}
+
+	if _, err := g.Compile(); err == nil || !strings.Contains(err.Error(), "not in node's destinations") {
+		t.Fatalf("expected branch destination declaration error, got %v", err)
+	}
+}
+
+func TestStateGraph_ValidateRejectsNilBranchPath(t *testing.T) {
+	g := NewStateGraph[map[string]any]()
+	g.AddNode("router", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		return NoNodeResult(), nil
+	})
+	g.AddEdge(Start, "router")
+	g.AddEdge("router", End)
+
+	g.branches["router"] = []*BranchSpec[map[string]any]{{
+		Name:    "manual",
+		Path:    nil,
+		PathMap: map[string]string{"x": End},
+	}}
+
+	if _, err := g.Compile(); err == nil || !strings.Contains(err.Error(), "has nil path") {
+		t.Fatalf("expected nil branch path error, got %v", err)
+	}
+}
+
 func assertPanicsWith(t *testing.T, contains string, fn func()) {
 	t.Helper()
 	defer func() {

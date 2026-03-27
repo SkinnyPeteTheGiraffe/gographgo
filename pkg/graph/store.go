@@ -73,41 +73,38 @@ func (s *InMemoryStore) Batch(ctx context.Context, ops []StoreOp) ([]any, error)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		switch typed := op.(type) {
-		case StoreGetOp:
-			item, err := s.GetItem(ctx, typed.Namespace, typed.Key, StoreGetOptions{RefreshTTL: typed.RefreshTTL})
-			if err != nil {
-				return nil, err
-			}
-			results[i] = item
-		case StorePutOp:
-			if typed.Value == nil {
-				if err := s.DeleteItem(ctx, typed.Namespace, typed.Key); err != nil {
-					return nil, err
-				}
-			} else {
-				if err := s.PutItem(ctx, typed.Namespace, typed.Key, typed.Value, StorePutOptions{TTL: typed.TTL, Index: typed.Index}); err != nil {
-					return nil, err
-				}
-			}
-			results[i] = nil
-		case StoreSearchOp:
-			items, err := s.SearchItems(ctx, StoreSearchRequest(typed))
-			if err != nil {
-				return nil, err
-			}
-			results[i] = items
-		case StoreListNamespacesOp:
-			namespaces, err := s.ListNamespaces(ctx, StoreNamespaceListRequest(typed))
-			if err != nil {
-				return nil, err
-			}
-			results[i] = namespaces
-		default:
-			return nil, &InvalidUpdateError{Message: "unsupported store operation"}
+		result, err := s.runBatchOp(ctx, op)
+		if err != nil {
+			return nil, err
 		}
+		results[i] = result
 	}
 	return results, nil
+}
+
+func (s *InMemoryStore) runBatchOp(ctx context.Context, op StoreOp) (any, error) {
+	switch typed := op.(type) {
+	case StoreGetOp:
+		return s.GetItem(ctx, typed.Namespace, typed.Key, StoreGetOptions{RefreshTTL: typed.RefreshTTL})
+	case StorePutOp:
+		if err := s.runStorePutOp(ctx, typed); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	case StoreSearchOp:
+		return s.SearchItems(ctx, StoreSearchRequest(typed))
+	case StoreListNamespacesOp:
+		return s.ListNamespaces(ctx, StoreNamespaceListRequest(typed))
+	default:
+		return nil, &InvalidUpdateError{Message: "unsupported store operation"}
+	}
+}
+
+func (s *InMemoryStore) runStorePutOp(ctx context.Context, op StorePutOp) error {
+	if op.Value == nil {
+		return s.DeleteItem(ctx, op.Namespace, op.Key)
+	}
+	return s.PutItem(ctx, op.Namespace, op.Key, op.Value, StorePutOptions{TTL: op.TTL, Index: op.Index})
 }
 
 // GetItem returns a store record and applies optional TTL refresh.
@@ -291,77 +288,130 @@ func (s *InMemoryStore) SearchItems(ctx context.Context, req StoreSearchRequest)
 	defer s.mu.Unlock()
 
 	results := make([]StoreSearchItem, 0)
-	queryText := strings.TrimSpace(req.Query)
-	queryEmbedding := map[string]float64(nil)
-	if queryText != "" {
-		queryEmbedding = buildStoreEmbedding(queryText, []string{"$"})
-	}
+	queryText, queryEmbedding := prepareStoreSearchQuery(req.Query)
 	for nsKey, nsEntries := range s.entries {
 		ns := expandStoreNamespace(nsKey)
 		if !hasNamespacePrefix(ns, req.NamespacePrefix) {
 			continue
 		}
-		for key, entry := range nsEntries {
-			if isStoreEntryExpired(entry, now) {
-				delete(nsEntries, key)
-				continue
-			}
-			score := (*float64)(nil)
-			if queryText != "" {
-				if len(entry.embedding) == 0 || len(queryEmbedding) == 0 {
-					continue
-				}
-				value := cosineSimilaritySparseVectors(entry.embedding, queryEmbedding)
-				if value <= 0 {
-					continue
-				}
-				score = ptrFloat64(value)
-			} else if !matchesStoreQuery(req.Query, key, entry.value) {
-				continue
-			}
-			if !matchesStoreFilter(entry.value, req.Filter) {
-				continue
-			}
-			if refresh && entry.ttl != nil {
-				expiresAt := now.Add(*entry.ttl)
-				entry.expiresAt = &expiresAt
-				nsEntries[key] = entry
-			}
-			results = append(results, StoreSearchItem{StoreItem: *entry.toItem(ns, key), Score: score})
-		}
+		matches := collectStoreSearchMatches(nsEntries, ns, req, queryText, queryEmbedding, now, refresh)
+		results = append(results, matches...)
 		if len(nsEntries) == 0 {
 			delete(s.entries, nsKey)
 		}
 	}
+	sortStoreSearchItems(results, queryText != "")
+	return paginateStoreSearchItems(results, req.Offset, req.Limit), nil
+}
 
-	sort.Slice(results, func(i, j int) bool {
-		if queryText != "" {
-			leftScore := storeScoreValue(results[i].Score)
-			rightScore := storeScoreValue(results[j].Score)
+func prepareStoreSearchQuery(query string) (queryText string, queryEmbedding map[string]float64) {
+	queryText = strings.TrimSpace(query)
+	if queryText == "" {
+		return "", nil
+	}
+	return queryText, buildStoreEmbedding(queryText, []string{"$"})
+}
+
+func collectStoreSearchMatches(
+	nsEntries map[string]storeEntry,
+	namespace []string,
+	req StoreSearchRequest,
+	queryText string,
+	queryEmbedding map[string]float64,
+	now time.Time,
+	refresh bool,
+) []StoreSearchItem {
+	out := make([]StoreSearchItem, 0)
+	for key, entry := range nsEntries {
+		if isStoreEntryExpired(entry, now) {
+			delete(nsEntries, key)
+			continue
+		}
+		score, ok := matchStoreSearchEntry(req, queryText, queryEmbedding, key, entry)
+		if !ok {
+			continue
+		}
+		if refresh && entry.ttl != nil {
+			expiresAt := now.Add(*entry.ttl)
+			entry.expiresAt = &expiresAt
+			nsEntries[key] = entry
+		}
+		out = append(out, StoreSearchItem{StoreItem: *entry.toItem(namespace, key), Score: score})
+	}
+	return out
+}
+
+func matchStoreSearchEntry(
+	req StoreSearchRequest,
+	queryText string,
+	queryEmbedding map[string]float64,
+	key string,
+	entry storeEntry,
+) (*float64, bool) {
+	score, ok := computeStoreSearchScore(queryText, queryEmbedding, req.Query, key, entry)
+	if !ok {
+		return nil, false
+	}
+	if !matchesStoreFilter(entry.value, req.Filter) {
+		return nil, false
+	}
+	return score, true
+}
+
+func computeStoreSearchScore(
+	queryText string,
+	queryEmbedding map[string]float64,
+	query string,
+	key string,
+	entry storeEntry,
+) (*float64, bool) {
+	if queryText == "" {
+		if !matchesStoreQuery(query, key, entry.value) {
+			return nil, false
+		}
+		return nil, true
+	}
+	if len(entry.embedding) == 0 || len(queryEmbedding) == 0 {
+		return nil, false
+	}
+	value := cosineSimilaritySparseVectors(entry.embedding, queryEmbedding)
+	if value <= 0 {
+		return nil, false
+	}
+	return ptrFloat64(value), true
+}
+
+func sortStoreSearchItems(items []StoreSearchItem, sortByScore bool) {
+	sort.Slice(items, func(i, j int) bool {
+		if sortByScore {
+			leftScore := storeScoreValue(items[i].Score)
+			rightScore := storeScoreValue(items[j].Score)
 			if leftScore != rightScore {
 				return leftScore > rightScore
 			}
 		}
-		leftNS := strings.Join(results[i].Namespace, "\x00")
-		rightNS := strings.Join(results[j].Namespace, "\x00")
+		leftNS := strings.Join(items[i].Namespace, "\x00")
+		rightNS := strings.Join(items[j].Namespace, "\x00")
 		if leftNS != rightNS {
 			return leftNS < rightNS
 		}
-		return results[i].Key < results[j].Key
+		return items[i].Key < items[j].Key
 	})
+}
 
-	start := req.Offset
+func paginateStoreSearchItems(items []StoreSearchItem, offset, limit int) []StoreSearchItem {
+	start := offset
 	if start < 0 {
 		start = 0
 	}
-	if start >= len(results) {
-		return nil, nil
+	if start >= len(items) {
+		return nil
 	}
-	end := len(results)
-	if req.Limit > 0 && start+req.Limit < end {
-		end = start + req.Limit
+	end := len(items)
+	if limit > 0 && start+limit < end {
+		end = start + limit
 	}
-	return append([]StoreSearchItem(nil), results[start:end]...), nil
+	return append([]StoreSearchItem(nil), items[start:end]...)
 }
 
 // ListNamespaces lists namespaces that contain at least one non-expired item,
@@ -507,37 +557,46 @@ func matchesStoreFilter(value any, filter map[string]any) bool {
 	return true
 }
 
-func compareFilterValues(itemValue any, filterValue any) bool {
-	switch fv := filterValue.(type) {
-	case map[string]any:
-		isOperator := false
-		for key := range fv {
-			if strings.HasPrefix(key, "$") {
-				isOperator = true
-				break
-			}
-		}
-		if isOperator {
-			for op, value := range fv {
-				if !applyFilterOperator(itemValue, op, value) {
-					return false
-				}
-			}
-			return true
-		}
-		itemMap, ok := itemValue.(map[string]any)
-		if !ok {
-			return false
-		}
-		for key, value := range fv {
-			if !compareFilterValues(itemMap[key], value) {
-				return false
-			}
-		}
-		return true
-	default:
+func compareFilterValues(itemValue, filterValue any) bool {
+	fv, ok := filterValue.(map[string]any)
+	if !ok {
 		return itemValue == filterValue
 	}
+	if filterMapUsesOperators(fv) {
+		return compareFilterOperatorMap(itemValue, fv)
+	}
+	return compareFilterNestedMap(itemValue, fv)
+}
+
+func filterMapUsesOperators(filter map[string]any) bool {
+	for key := range filter {
+		if strings.HasPrefix(key, "$") {
+			return true
+		}
+	}
+	return false
+}
+
+func compareFilterOperatorMap(itemValue any, filter map[string]any) bool {
+	for op, value := range filter {
+		if !applyFilterOperator(itemValue, op, value) {
+			return false
+		}
+	}
+	return true
+}
+
+func compareFilterNestedMap(itemValue any, filter map[string]any) bool {
+	itemMap, ok := itemValue.(map[string]any)
+	if !ok {
+		return false
+	}
+	for key, value := range filter {
+		if !compareFilterValues(itemMap[key], value) {
+			return false
+		}
+	}
+	return true
 }
 
 func applyFilterOperator(itemValue any, operator string, filterValue any) bool {
@@ -566,7 +625,7 @@ func applyFilterOperator(itemValue any, operator string, filterValue any) bool {
 	return false
 }
 
-func resolveStoreIndexFields(raw any) ([]string, bool, error) {
+func resolveStoreIndexFields(raw any) (fields []string, enabled bool, err error) {
 	if raw == nil {
 		return []string{"$"}, true, nil
 	}
@@ -577,43 +636,52 @@ func resolveStoreIndexFields(raw any) ([]string, bool, error) {
 		}
 		return []string{"$"}, true, nil
 	case []string:
-		if len(typed) == 0 {
-			return []string{"$"}, true, nil
-		}
-		return append([]string(nil), typed...), true, nil
+		return normalizeStoreStringFields(typed), true, nil
 	case map[string]any:
-		fieldsRaw, hasFields := typed["fields"]
-		if !hasFields || fieldsRaw == nil {
-			return []string{"$"}, true, nil
-		}
-		fields, ok := fieldsRaw.([]any)
-		if !ok {
-			stringFields, okString := fieldsRaw.([]string)
-			if !okString {
-				return nil, false, &InvalidUpdateError{Message: "store index fields must be an array of strings"}
-			}
-			if len(stringFields) == 0 {
-				return []string{"$"}, true, nil
-			}
-			return append([]string(nil), stringFields...), true, nil
-		}
-		out := make([]string, 0, len(fields))
-		for _, field := range fields {
-			text, ok := field.(string)
-			if !ok {
-				return nil, false, &InvalidUpdateError{Message: "store index fields must be an array of strings"}
-			}
-			if strings.TrimSpace(text) != "" {
-				out = append(out, text)
-			}
-		}
-		if len(out) == 0 {
-			return []string{"$"}, true, nil
-		}
-		return out, true, nil
+		return resolveStoreIndexFieldsFromMap(typed)
 	default:
 		return nil, false, &InvalidUpdateError{Message: "store index must be false, a fields array, or an object with fields"}
 	}
+}
+
+func resolveStoreIndexFieldsFromMap(raw map[string]any) (fields []string, enabled bool, err error) {
+	fieldsRaw, hasFields := raw["fields"]
+	if !hasFields || fieldsRaw == nil {
+		return []string{"$"}, true, nil
+	}
+	stringFields, err := parseStoreIndexFields(fieldsRaw)
+	if err != nil {
+		return nil, false, err
+	}
+	return normalizeStoreStringFields(stringFields), true, nil
+}
+
+func parseStoreIndexFields(raw any) ([]string, error) {
+	if stringFields, ok := raw.([]string); ok {
+		return append([]string(nil), stringFields...), nil
+	}
+	fields, ok := raw.([]any)
+	if !ok {
+		return nil, &InvalidUpdateError{Message: "store index fields must be an array of strings"}
+	}
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		text, ok := field.(string)
+		if !ok {
+			return nil, &InvalidUpdateError{Message: "store index fields must be an array of strings"}
+		}
+		if strings.TrimSpace(text) != "" {
+			out = append(out, text)
+		}
+	}
+	return out, nil
+}
+
+func normalizeStoreStringFields(fields []string) []string {
+	if len(fields) == 0 {
+		return []string{"$"}
+	}
+	return append([]string(nil), fields...)
 }
 
 func buildStoreEmbedding(value any, fields []string) map[string]float64 {
@@ -780,46 +848,66 @@ func extractStorePathValues(value any, tokens []storePathToken) []any {
 	tok := tokens[0]
 	rest := tokens[1:]
 	if tok.field != "" {
-		asMap, ok := value.(map[string]any)
-		if !ok {
-			return nil
-		}
-		next, exists := asMap[tok.field]
-		if !exists {
-			return nil
-		}
-		return extractStorePathValues(next, rest)
+		return extractStoreFieldPathValues(value, tok.field, rest)
 	}
 	if tok.wildcard {
-		switch typed := value.(type) {
-		case []any:
-			out := make([]any, 0)
-			for _, item := range typed {
-				out = append(out, extractStorePathValues(item, rest)...)
-			}
-			return out
-		case map[string]any:
-			out := make([]any, 0)
-			for _, item := range typed {
-				out = append(out, extractStorePathValues(item, rest)...)
-			}
-			return out
-		default:
-			return nil
-		}
+		return extractStoreWildcardPathValues(value, rest)
 	}
+	return extractStoreIndexPathValues(value, tok.index, rest)
+}
+
+func extractStoreFieldPathValues(value any, field string, rest []storePathToken) []any {
+	asMap, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	next, exists := asMap[field]
+	if !exists {
+		return nil
+	}
+	return extractStorePathValues(next, rest)
+}
+
+func extractStoreWildcardPathValues(value any, rest []storePathToken) []any {
+	switch typed := value.(type) {
+	case []any:
+		return extractStoreWildcardSliceValues(typed, rest)
+	case map[string]any:
+		return extractStoreWildcardMapValues(typed, rest)
+	default:
+		return nil
+	}
+}
+
+func extractStoreWildcardSliceValues(values []any, rest []storePathToken) []any {
+	out := make([]any, 0)
+	for _, item := range values {
+		out = append(out, extractStorePathValues(item, rest)...)
+	}
+	return out
+}
+
+func extractStoreWildcardMapValues(values map[string]any, rest []storePathToken) []any {
+	out := make([]any, 0)
+	for _, item := range values {
+		out = append(out, extractStorePathValues(item, rest)...)
+	}
+	return out
+}
+
+func extractStoreIndexPathValues(value any, index int, rest []storePathToken) []any {
 	asList, ok := value.([]any)
 	if !ok {
 		return nil
 	}
-	index := tok.index
-	if index < 0 {
-		index = len(asList) + index
+	resolved := index
+	if resolved < 0 {
+		resolved = len(asList) + resolved
 	}
-	if index < 0 || index >= len(asList) {
+	if resolved < 0 || resolved >= len(asList) {
 		return nil
 	}
-	return extractStorePathValues(asList[index], rest)
+	return extractStorePathValues(asList[resolved], rest)
 }
 
 func toNumeric(value any) (float64, bool) {

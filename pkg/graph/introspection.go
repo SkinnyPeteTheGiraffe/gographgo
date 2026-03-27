@@ -167,48 +167,44 @@ func (g GraphInfo) Mermaid() string {
 	var b strings.Builder
 	b.WriteString("flowchart TD\n")
 
-	nodes := append([]GraphNodeInfo(nil), g.Nodes...)
-	sort.Slice(nodes, func(i, j int) bool {
-		return nodes[i].Name < nodes[j].Name
-	})
+	nodes := sortedGraphNodes(g.Nodes)
+	idByName := mermaidNodeIDs(nodes)
+	writeMermaidNodes(&b, nodes, idByName)
+	writeMermaidEdges(&b, sortedGraphEdges(g.Edges), idByName)
 
+	return b.String()
+}
+
+func sortedGraphNodes(nodes []GraphNodeInfo) []GraphNodeInfo {
+	out := append([]GraphNodeInfo(nil), nodes...)
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func mermaidNodeIDs(nodes []GraphNodeInfo) map[string]string {
 	idByName := make(map[string]string, len(nodes))
 	usedIDs := map[string]int{}
 	for _, node := range nodes {
 		idByName[node.Name] = nextMermaidID(node.Name, usedIDs)
 	}
+	return idByName
+}
 
+func writeMermaidNodes(b *strings.Builder, nodes []GraphNodeInfo, idByName map[string]string) {
 	for _, node := range nodes {
 		id := idByName[node.Name]
 		label := escapeMermaidLabel(node.Name)
-		switch node.Kind {
-		case GraphNodeStart, GraphNodeEnd:
-			_, _ = fmt.Fprintf(&b, "    %s((%q))\n", id, label)
-		default:
-			_, _ = fmt.Fprintf(&b, "    %s[%q]\n", id, label)
+		if node.Kind == GraphNodeStart || node.Kind == GraphNodeEnd {
+			_, _ = fmt.Fprintf(b, "    %s((%q))\n", id, label)
+			continue
 		}
+		_, _ = fmt.Fprintf(b, "    %s[%q]\n", id, label)
 	}
+}
 
-	edges := append([]GraphEdgeInfo(nil), g.Edges...)
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].Source != edges[j].Source {
-			return edges[i].Source < edges[j].Source
-		}
-		if edges[i].Target != edges[j].Target {
-			return edges[i].Target < edges[j].Target
-		}
-		if edges[i].Kind != edges[j].Kind {
-			return edges[i].Kind < edges[j].Kind
-		}
-		if edges[i].Branch != edges[j].Branch {
-			return edges[i].Branch < edges[j].Branch
-		}
-		if edges[i].Label != edges[j].Label {
-			return edges[i].Label < edges[j].Label
-		}
-		return !edges[i].Resolved && edges[j].Resolved
-	})
-
+func writeMermaidEdges(b *strings.Builder, edges []GraphEdgeInfo, idByName map[string]string) {
 	for _, edge := range edges {
 		sourceID, sourceOK := idByName[edge.Source]
 		targetID, targetOK := idByName[edge.Target]
@@ -216,24 +212,24 @@ func (g GraphInfo) Mermaid() string {
 			continue
 		}
 		if !edge.Resolved || edge.Target == "" || !targetOK {
-			_, _ = fmt.Fprintf(&b, "    %% unresolved conditional route from %s (%s)\n", sourceID, edge.Branch)
+			_, _ = fmt.Fprintf(b, "    %% unresolved conditional route from %s (%s)\n", sourceID, edge.Branch)
 			continue
 		}
-
-		connector := "-->"
-		if edge.Kind == GraphEdgeConditional {
-			connector = "-.->"
-		}
-
+		connector := mermaidEdgeConnector(edge)
 		label := strings.TrimSpace(edgeLabel(edge))
 		if label != "" {
-			_, _ = fmt.Fprintf(&b, "    %s %s|%s| %s\n", sourceID, connector, escapeMermaidLabel(label), targetID)
+			_, _ = fmt.Fprintf(b, "    %s %s|%s| %s\n", sourceID, connector, escapeMermaidLabel(label), targetID)
 			continue
 		}
-		_, _ = fmt.Fprintf(&b, "    %s %s %s\n", sourceID, connector, targetID)
+		_, _ = fmt.Fprintf(b, "    %s %s %s\n", sourceID, connector, targetID)
 	}
+}
 
-	return b.String()
+func mermaidEdgeConnector(edge GraphEdgeInfo) string {
+	if edge.Kind == GraphEdgeConditional {
+		return "-.->"
+	}
+	return "-->"
 }
 
 // Schemas return JSON-schema-compatible views for graph input/output/context.
@@ -313,51 +309,59 @@ func graphNodesFromBuilder[State, Context, Input, Output any](b *StateGraph[Stat
 
 func graphEdgesFromBuilder[State, Context, Input, Output any](b *StateGraph[State, Context, Input, Output]) []GraphEdgeInfo {
 	edges := make([]GraphEdgeInfo, 0, len(b.edges)+len(b.waitingEdges))
+	edges = append(edges, directGraphEdges(b.edges)...)
+	edges = append(edges, waitingGraphEdges(b.waitingEdges)...)
+	edges = append(edges, conditionalGraphEdges(b.branches)...)
+	return sortedGraphEdges(edges)
+}
 
-	for _, edge := range b.edges {
-		edges = append(edges, GraphEdgeInfo{
+func directGraphEdges(edges []Edge) []GraphEdgeInfo {
+	out := make([]GraphEdgeInfo, 0, len(edges))
+	for _, edge := range edges {
+		out = append(out, GraphEdgeInfo{
 			Source:   edge.Source,
 			Target:   edge.Target,
 			Kind:     GraphEdgeDirect,
 			Resolved: edge.Target != "",
 		})
 	}
+	return out
+}
 
-	for _, we := range b.waitingEdges {
-		waitFor := sortedUnique(we.Sources)
-		for _, src := range waitFor {
-			edges = append(edges, GraphEdgeInfo{
-				Source:   src,
-				Target:   we.Target,
+func waitingGraphEdges(waitingEdges []WaitingEdge) []GraphEdgeInfo {
+	out := make([]GraphEdgeInfo, 0, len(waitingEdges))
+	for _, waiting := range waitingEdges {
+		waitFor := sortedUnique(waiting.Sources)
+		for _, source := range waitFor {
+			out = append(out, GraphEdgeInfo{
+				Source:   source,
+				Target:   waiting.Target,
 				Kind:     GraphEdgeWaiting,
 				WaitFor:  append([]string(nil), waitFor...),
-				Resolved: we.Target != "",
+				Resolved: waiting.Target != "",
 			})
 		}
 	}
+	return out
+}
 
-	branchSources := make([]string, 0, len(b.branches))
-	for source := range b.branches {
-		branchSources = append(branchSources, source)
+func conditionalGraphEdges[State any](branches map[string][]*BranchSpec[State]) []GraphEdgeInfo {
+	sources := make([]string, 0, len(branches))
+	for source := range branches {
+		sources = append(sources, source)
 	}
-	sort.Strings(branchSources)
+	sort.Strings(sources)
 
-	for _, source := range branchSources {
-		branches := b.branches[source]
-		for _, branch := range branches {
+	out := make([]GraphEdgeInfo, 0)
+	for _, source := range sources {
+		for _, branch := range branches[source] {
 			targets := sortedConditionalTargets(branch)
 			if len(targets) == 0 {
-				edges = append(edges, GraphEdgeInfo{
-					Source:   source,
-					Kind:     GraphEdgeConditional,
-					Label:    "dynamic",
-					Branch:   branch.Name,
-					Resolved: false,
-				})
+				out = append(out, GraphEdgeInfo{Source: source, Kind: GraphEdgeConditional, Label: "dynamic", Branch: branch.Name, Resolved: false})
 				continue
 			}
 			for _, target := range targets {
-				edges = append(edges, GraphEdgeInfo{
+				out = append(out, GraphEdgeInfo{
 					Source:   source,
 					Target:   target.target,
 					Kind:     GraphEdgeConditional,
@@ -368,27 +372,30 @@ func graphEdgesFromBuilder[State, Context, Input, Output any](b *StateGraph[Stat
 			}
 		}
 	}
+	return out
+}
 
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].Source != edges[j].Source {
-			return edges[i].Source < edges[j].Source
+func sortedGraphEdges(edges []GraphEdgeInfo) []GraphEdgeInfo {
+	out := append([]GraphEdgeInfo(nil), edges...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Source != out[j].Source {
+			return out[i].Source < out[j].Source
 		}
-		if edges[i].Target != edges[j].Target {
-			return edges[i].Target < edges[j].Target
+		if out[i].Target != out[j].Target {
+			return out[i].Target < out[j].Target
 		}
-		if edges[i].Kind != edges[j].Kind {
-			return edges[i].Kind < edges[j].Kind
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
 		}
-		if edges[i].Branch != edges[j].Branch {
-			return edges[i].Branch < edges[j].Branch
+		if out[i].Branch != out[j].Branch {
+			return out[i].Branch < out[j].Branch
 		}
-		if edges[i].Label != edges[j].Label {
-			return edges[i].Label < edges[j].Label
+		if out[i].Label != out[j].Label {
+			return out[i].Label < out[j].Label
 		}
-		return !edges[i].Resolved && edges[j].Resolved
+		return !out[i].Resolved && out[j].Resolved
 	})
-
-	return edges
+	return out
 }
 
 type labeledTarget struct {

@@ -2,10 +2,15 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
 )
+
+type unsupportedStoreOp struct{}
+
+func (unsupportedStoreOp) isStoreOp() {}
 
 func TestInMemoryStoreBatchOperations(t *testing.T) {
 	store := NewInMemoryStore()
@@ -180,4 +185,59 @@ func TestInMemoryStoreVectorSearchHonorsIndexConfiguration(t *testing.T) {
 	if results[0].Score == nil || *results[0].Score <= 0 {
 		t.Fatalf("expected positive vector score, got %#v", results[0].Score)
 	}
+}
+
+func TestInMemoryStoreBatchRejectsUnsupportedOperation(t *testing.T) {
+	store := NewInMemoryStore()
+	_, err := store.Batch(context.Background(), []StoreOp{unsupportedStoreOp{}})
+	if err == nil {
+		t.Fatal("expected unsupported operation error")
+	}
+	var invalid *InvalidUpdateError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("err type = %T, want *InvalidUpdateError", err)
+	}
+}
+
+func TestStoreFilterAndIndexPathHelpers(t *testing.T) {
+	t.Run("compareFilterValues nested and operators", func(t *testing.T) {
+		item := map[string]any{"score": 8, "meta": map[string]any{"tier": "gold"}}
+		if !compareFilterValues(item["score"], map[string]any{"$gte": 7}) {
+			t.Fatal("expected numeric operator comparison to match")
+		}
+		if !compareFilterValues(item["meta"], map[string]any{"tier": "gold"}) {
+			t.Fatal("expected nested map comparison to match")
+		}
+		if compareFilterValues(item["score"], map[string]any{"$lt": 3}) {
+			t.Fatal("expected mismatch for failing comparison")
+		}
+	})
+
+	t.Run("resolveStoreIndexFields and path extraction", func(t *testing.T) {
+		fields, enabled, err := resolveStoreIndexFields(map[string]any{"fields": []any{"title", " ", "meta.tier"}})
+		if err != nil {
+			t.Fatalf("resolveStoreIndexFields: %v", err)
+		}
+		if !enabled {
+			t.Fatal("expected indexing to be enabled")
+		}
+		if !slices.Equal(fields, []string{"title", "meta.tier"}) {
+			t.Fatalf("fields = %v, want [title meta.tier]", fields)
+		}
+
+		value := map[string]any{
+			"items": []any{
+				map[string]any{"meta": map[string]any{"tier": "gold"}},
+				map[string]any{"meta": map[string]any{"tier": "silver"}},
+			},
+		}
+		tokens, ok := parseStorePath("items[*].meta.tier")
+		if !ok {
+			t.Fatal("expected valid path tokens")
+		}
+		out := extractStorePathValues(value, tokens)
+		if len(out) != 2 || out[0] != "gold" || out[1] != "silver" {
+			t.Fatalf("extractStorePathValues = %#v, want [gold silver]", out)
+		}
+	})
 }

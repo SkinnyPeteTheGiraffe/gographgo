@@ -661,19 +661,9 @@ func (a *ReactAgent) ResumeStateWithOptions(
 	if a.constructionErrs != nil {
 		return AgentStateResult{}, a.constructionErrs
 	}
-	if pending == nil {
-		if a.checkpointer != nil && options.ThreadID != "" {
-			loadedState, loadedPending, err := a.loadCheckpoint(ctx, options)
-			if err != nil {
-				return AgentStateResult{}, err
-			}
-			if loadedPending != nil {
-				pending = loadedPending
-				if pending.State.Messages == nil && loadedState != nil {
-					pending.State = *loadedState
-				}
-			}
-		}
+	pending, err := a.resolvePendingForResume(ctx, pending, options)
+	if err != nil {
+		return AgentStateResult{}, err
 	}
 	if pending == nil {
 		return AgentStateResult{}, fmt.Errorf("prebuilt: pending tool calls must not be nil")
@@ -683,54 +673,128 @@ func (a *ReactAgent) ResumeStateWithOptions(
 		return AgentStateResult{}, err
 	}
 	state := cloneState(pending.State)
+	return a.resumeFromPendingStage(ctx, state, pending, responses, runtime, options)
+}
 
+func (a *ReactAgent) resolvePendingForResume(
+	ctx context.Context,
+	pending *PendingToolCalls,
+	options AgentInvokeOptions,
+) (*PendingToolCalls, error) {
+	if pending != nil || a.checkpointer == nil || options.ThreadID == "" {
+		return pending, nil
+	}
+	loadedState, loadedPending, err := a.loadCheckpoint(ctx, options)
+	if err != nil {
+		return nil, err
+	}
+	if loadedPending == nil {
+		return nil, nil
+	}
+	if loadedPending.State.Messages == nil && loadedState != nil {
+		loadedPending.State = *loadedState
+	}
+	return loadedPending, nil
+}
+
+func (a *ReactAgent) resumeFromPendingStage(
+	ctx context.Context,
+	state AgentState,
+	pending *PendingToolCalls,
+	responses map[string]HumanResponse,
+	runtime AgentRuntime,
+	options AgentInvokeOptions,
+) (AgentStateResult, error) {
 	switch pending.Stage {
 	case PendingStageBeforeAgent:
-		core, invokeErr := a.invokeCoreFrom(ctx, state, runtime, true)
-		if invokeErr != nil {
-			return AgentStateResult{}, invokeErr
-		}
-		return a.finalizeStateResult(ctx, core, options)
+		return a.resumeBeforeAgentStage(ctx, state, runtime, options)
 	case PendingStageAfterAgent, PendingStageBeforeTools:
-		state, toolErr := a.applyPendingToolResponses(ctx, state, pending.Calls, responses)
-		if toolErr != nil {
-			return AgentStateResult{}, toolErr
-		}
-		if pending.Stage == PendingStageAfterAgent && a.shouldInterruptBefore(toolsNodeName) {
-			return a.finalizeStateResult(ctx, invokeCoreResult{
-				state: state,
-				interrupts: []graph.Interrupt{
-					buildNodeInterrupt(toolsNodeName, a.interruptCfg, a.interruptDesc),
-				},
-				pending: &PendingToolCalls{
-					State: cloneState(state),
-					Calls: cloneToolCalls(pending.Calls),
-					Stage: PendingStageBeforeTools,
-				},
-			}, options)
-		}
-		if shouldReturnDirectFromHistory(a.toolNode, state.Messages) {
-			return a.finalizeStateResult(ctx, invokeCoreResult{state: state}, options)
-		}
-		state.RemainingSteps = maxInt(1, state.RemainingSteps-1)
-		core, invokeErr := a.invokeCore(ctx, state, runtime)
-		if invokeErr != nil {
-			return AgentStateResult{}, invokeErr
-		}
-		return a.finalizeStateResult(ctx, core, options)
+		return a.resumeAgentOrToolsStage(ctx, state, pending, responses, runtime, options)
 	case PendingStageAfterTools:
-		if shouldReturnDirectFromHistory(a.toolNode, state.Messages) {
-			return a.finalizeStateResult(ctx, invokeCoreResult{state: state}, options)
-		}
-		state.RemainingSteps = maxInt(1, state.RemainingSteps-1)
-		core, invokeErr := a.invokeCore(ctx, state, runtime)
-		if invokeErr != nil {
-			return AgentStateResult{}, invokeErr
-		}
-		return a.finalizeStateResult(ctx, core, options)
+		return a.resumeAfterToolsStage(ctx, state, runtime, options)
 	default:
 		return AgentStateResult{}, fmt.Errorf("prebuilt: unknown pending stage %q", pending.Stage)
 	}
+}
+
+func (a *ReactAgent) resumeBeforeAgentStage(
+	ctx context.Context,
+	state AgentState,
+	runtime AgentRuntime,
+	options AgentInvokeOptions,
+) (AgentStateResult, error) {
+	core, err := a.invokeCoreFrom(ctx, state, runtime, true)
+	if err != nil {
+		return AgentStateResult{}, err
+	}
+	return a.finalizeStateResult(ctx, core, options)
+}
+
+func (a *ReactAgent) resumeAgentOrToolsStage(
+	ctx context.Context,
+	state AgentState,
+	pending *PendingToolCalls,
+	responses map[string]HumanResponse,
+	runtime AgentRuntime,
+	options AgentInvokeOptions,
+) (AgentStateResult, error) {
+	updatedState, err := a.applyPendingToolResponses(ctx, state, pending.Calls, responses)
+	if err != nil {
+		return AgentStateResult{}, err
+	}
+	if pending.Stage == PendingStageAfterAgent {
+		interruptResult, interrupted := a.interruptBeforeToolsResumeResult(updatedState, pending.Calls)
+		if interrupted {
+			return a.finalizeStateResult(ctx, interruptResult, options)
+		}
+	}
+	return a.resumeAfterToolHandling(ctx, updatedState, runtime, options)
+}
+
+func (a *ReactAgent) interruptBeforeToolsResumeResult(
+	state AgentState,
+	calls []ToolCall,
+) (invokeCoreResult, bool) {
+	if !a.shouldInterruptBefore(toolsNodeName) {
+		return invokeCoreResult{}, false
+	}
+	return invokeCoreResult{
+		state: state,
+		interrupts: []graph.Interrupt{
+			buildNodeInterrupt(toolsNodeName, a.interruptCfg, a.interruptDesc),
+		},
+		pending: &PendingToolCalls{
+			State: cloneState(state),
+			Calls: cloneToolCalls(calls),
+			Stage: PendingStageBeforeTools,
+		},
+	}, true
+}
+
+func (a *ReactAgent) resumeAfterToolsStage(
+	ctx context.Context,
+	state AgentState,
+	runtime AgentRuntime,
+	options AgentInvokeOptions,
+) (AgentStateResult, error) {
+	return a.resumeAfterToolHandling(ctx, state, runtime, options)
+}
+
+func (a *ReactAgent) resumeAfterToolHandling(
+	ctx context.Context,
+	state AgentState,
+	runtime AgentRuntime,
+	options AgentInvokeOptions,
+) (AgentStateResult, error) {
+	if shouldReturnDirectFromHistory(a.toolNode, state.Messages) {
+		return a.finalizeStateResult(ctx, invokeCoreResult{state: state}, options)
+	}
+	state.RemainingSteps = maxInt(1, state.RemainingSteps-1)
+	core, err := a.invokeCore(ctx, state, runtime)
+	if err != nil {
+		return AgentStateResult{}, err
+	}
+	return a.finalizeStateResult(ctx, core, options)
 }
 
 // ResumeAsync runs Resume in a background goroutine.
@@ -770,152 +834,304 @@ func (a *ReactAgent) invokeCoreFrom(
 	current := cloneState(state)
 
 	for step := 0; step < current.RemainingSteps; step++ {
-		if err := ctx.Err(); err != nil {
-			return invokeCoreResult{}, err
-		}
-		if (!skipBeforeAgent || step != 0) && a.shouldInterruptBefore(agentNodeName) {
-			return invokeCoreResult{
-				state: current,
-				interrupts: []graph.Interrupt{
-					buildNodeInterrupt(agentNodeName, a.interruptCfg, a.interruptDesc),
-				},
-				pending: &PendingToolCalls{State: cloneState(current), Stage: PendingStageBeforeAgent},
-			}, nil
-		}
-
-		modelInputState := cloneState(current)
-		llmInput := cloneMessages(current.Messages)
-		if a.preModelHook != nil {
-			hookOut, err := a.preModelHook(ctx, cloneState(current), runtime)
-			if err != nil {
-				return invokeCoreResult{}, err
-			}
-			modelInputState = cloneState(hookOut.State)
-			current = cloneState(hookOut.State)
-			if len(hookOut.LLMInputMessages) > 0 {
-				llmInput = cloneMessages(hookOut.LLMInputMessages)
-			} else {
-				llmInput = cloneMessages(current.Messages)
-			}
-		}
-		promptedInput, err := a.applyPrompt(ctx, modelInputState, runtime, llmInput)
+		stepState, result, err := a.runInvokeCoreStep(ctx, current, runtime, skipBeforeAgent, step)
 		if err != nil {
 			return invokeCoreResult{}, err
 		}
-		if err := validateChatHistory(promptedInput); err != nil {
-			return invokeCoreResult{}, err
+		if result != nil {
+			return *result, nil
 		}
-
-		model, err := a.resolveModel(ctx, modelInputState, runtime)
-		if err != nil {
-			return invokeCoreResult{}, err
-		}
-		resp, err := model.Generate(ctx, promptedInput)
-		if err != nil {
-			return invokeCoreResult{}, err
-		}
-		assistant := Message{Role: roleAssistant, Content: resp.Content, Name: resp.Name, ToolCalls: cloneToolCalls(resp.ToolCalls)}
-		if assistant.Name == "" {
-			assistant.Name = a.name
-		}
-		current.Messages = append(current.Messages, assistant)
-
-		if a.postModelHook != nil {
-			updated, hookErr := a.postModelHook(ctx, cloneState(current), resp, runtime)
-			if hookErr != nil {
-				return invokeCoreResult{}, hookErr
-			}
-			current = cloneState(updated)
-		}
-
-		pendingCalls := pendingToolCalls(resp.ToolCalls, current.Messages)
-		if a.shouldInterruptAfter(agentNodeName) {
-			return invokeCoreResult{
-				state: current,
-				interrupts: []graph.Interrupt{
-					buildNodeInterrupt(agentNodeName, a.interruptCfg, a.interruptDesc),
-				},
-				pending: &PendingToolCalls{
-					State: cloneState(current),
-					Calls: cloneToolCalls(pendingCalls),
-					Stage: PendingStageAfterAgent,
-				},
-			}, nil
-		}
-
-		if len(pendingCalls) == 0 {
-			if err := a.generateStructuredResponse(ctx, &current, runtime); err != nil {
-				return invokeCoreResult{}, err
-			}
-			return invokeCoreResult{state: current}, nil
-		}
-
-		if needsMoreSteps(current.RemainingSteps-step, pendingCalls) {
-			current.Messages[len(current.Messages)-1] = Message{Role: roleAssistant, Name: assistant.Name, Content: remainingStepsMsg}
-			if err := a.generateStructuredResponse(ctx, &current, runtime); err != nil {
-				return invokeCoreResult{}, err
-			}
-			return invokeCoreResult{state: current}, nil
-		}
-
-		if a.validationNode != nil {
-			validationMessages, err := a.validationNode.Validate(ctx, pendingCalls)
-			if err != nil {
-				return invokeCoreResult{}, err
-			}
-			if hasValidationErrors(validationMessages) {
-				current.Messages = append(current.Messages, toolMessagesToMessages(validationMessages)...)
-				continue
-			}
-		}
-
-		if a.shouldInterruptBefore(toolsNodeName) {
-			interrupts := make([]graph.Interrupt, 0, len(pendingCalls))
-			for _, call := range pendingCalls {
-				interrupts = append(interrupts, BuildToolInterrupt(call, a.interruptCfg, a.interruptDesc))
-			}
-			if len(interrupts) == 0 {
-				interrupts = append(interrupts, buildNodeInterrupt(toolsNodeName, a.interruptCfg, a.interruptDesc))
-			}
-			return invokeCoreResult{
-				state:      current,
-				interrupts: interrupts,
-				pending: &PendingToolCalls{
-					State: cloneState(current),
-					Calls: cloneToolCalls(pendingCalls),
-					Stage: PendingStageBeforeTools,
-				},
-			}, nil
-		}
-
-		updatedState, err := a.executeToolCalls(ctx, current, pendingCalls)
-		if err != nil {
-			return invokeCoreResult{}, err
-		}
-		current = updatedState
-
-		if a.shouldInterruptAfter(toolsNodeName) {
-			return invokeCoreResult{
-				state: current,
-				interrupts: []graph.Interrupt{
-					buildNodeInterrupt(toolsNodeName, a.interruptCfg, a.interruptDesc),
-				},
-				pending: &PendingToolCalls{
-					State: cloneState(current),
-					Stage: PendingStageAfterTools,
-				},
-			}, nil
-		}
-
-		if anyReturnDirect(a.toolNode, pendingCalls) {
-			return invokeCoreResult{state: current}, nil
-		}
+		current = stepState
 	}
 
 	if err := a.generateStructuredResponse(ctx, &current, runtime); err != nil {
 		return invokeCoreResult{}, err
 	}
 	return invokeCoreResult{state: current}, nil
+}
+
+type agentModelStep struct {
+	assistant    Message
+	pendingCalls []ToolCall
+	state        AgentState
+}
+
+func (a *ReactAgent) runInvokeCoreStep(
+	ctx context.Context,
+	current AgentState,
+	runtime AgentRuntime,
+	skipBeforeAgent bool,
+	step int,
+) (AgentState, *invokeCoreResult, error) {
+	if err := ctx.Err(); err != nil {
+		return AgentState{}, nil, err
+	}
+	if result, interrupted := a.interruptBeforeAgentResult(current, skipBeforeAgent, step); interrupted {
+		return AgentState{}, &result, nil
+	}
+
+	modelStep, err := a.runAgentModelStep(ctx, current, runtime)
+	if err != nil {
+		return AgentState{}, nil, err
+	}
+
+	nextState, result, err := a.handlePostModelStep(ctx, modelStep, runtime, step)
+	if err != nil {
+		return AgentState{}, nil, err
+	}
+	if result != nil {
+		return AgentState{}, result, nil
+	}
+	return nextState, nil, nil
+}
+
+func (a *ReactAgent) interruptBeforeAgentResult(
+	state AgentState,
+	skipBeforeAgent bool,
+	step int,
+) (invokeCoreResult, bool) {
+	if (skipBeforeAgent && step == 0) || !a.shouldInterruptBefore(agentNodeName) {
+		return invokeCoreResult{}, false
+	}
+	return invokeCoreResult{
+		state: state,
+		interrupts: []graph.Interrupt{
+			buildNodeInterrupt(agentNodeName, a.interruptCfg, a.interruptDesc),
+		},
+		pending: &PendingToolCalls{State: cloneState(state), Stage: PendingStageBeforeAgent},
+	}, true
+}
+
+func (a *ReactAgent) runAgentModelStep(
+	ctx context.Context,
+	current AgentState,
+	runtime AgentRuntime,
+) (agentModelStep, error) {
+	modelInputState, llmInput, nextState, err := a.prepareModelInput(ctx, current, runtime)
+	if err != nil {
+		return agentModelStep{}, err
+	}
+	resp, err := a.generateModelResponse(ctx, modelInputState, runtime, llmInput)
+	if err != nil {
+		return agentModelStep{}, err
+	}
+	assistant := assistantMessageFromResponse(resp, a.name)
+	nextState.Messages = append(nextState.Messages, assistant)
+	nextState, err = a.applyPostModelHook(ctx, nextState, resp, runtime)
+	if err != nil {
+		return agentModelStep{}, err
+	}
+	return agentModelStep{
+		assistant:    assistant,
+		pendingCalls: pendingToolCalls(resp.ToolCalls, nextState.Messages),
+		state:        nextState,
+	}, nil
+}
+
+func (a *ReactAgent) prepareModelInput(
+	ctx context.Context,
+	current AgentState,
+	runtime AgentRuntime,
+) (inputState AgentState, promptInputs []Message, nextAgentState AgentState, agentErr error) {
+	modelInputState := cloneState(current)
+	llmInput := cloneMessages(current.Messages)
+	nextState := cloneState(current)
+	if a.preModelHook != nil {
+		hookOut, err := a.preModelHook(ctx, cloneState(current), runtime)
+		if err != nil {
+			return AgentState{}, nil, AgentState{}, err
+		}
+		modelInputState = cloneState(hookOut.State)
+		nextState = cloneState(hookOut.State)
+		if len(hookOut.LLMInputMessages) > 0 {
+			llmInput = cloneMessages(hookOut.LLMInputMessages)
+		} else {
+			llmInput = cloneMessages(nextState.Messages)
+		}
+	}
+	promptedInput, err := a.applyPrompt(ctx, modelInputState, runtime, llmInput)
+	if err != nil {
+		return AgentState{}, nil, AgentState{}, err
+	}
+	if err := validateChatHistory(promptedInput); err != nil {
+		return AgentState{}, nil, AgentState{}, err
+	}
+	return modelInputState, promptedInput, nextState, nil
+}
+
+func (a *ReactAgent) generateModelResponse(
+	ctx context.Context,
+	modelInputState AgentState,
+	runtime AgentRuntime,
+	messages []Message,
+) (ModelResponse, error) {
+	model, err := a.resolveModel(ctx, modelInputState, runtime)
+	if err != nil {
+		return ModelResponse{}, err
+	}
+	return model.Generate(ctx, messages)
+}
+
+func assistantMessageFromResponse(resp ModelResponse, defaultName string) Message {
+	assistant := Message{Role: roleAssistant, Content: resp.Content, Name: resp.Name, ToolCalls: cloneToolCalls(resp.ToolCalls)}
+	if assistant.Name == "" {
+		assistant.Name = defaultName
+	}
+	return assistant
+}
+
+func (a *ReactAgent) applyPostModelHook(
+	ctx context.Context,
+	state AgentState,
+	response ModelResponse,
+	runtime AgentRuntime,
+) (AgentState, error) {
+	if a.postModelHook == nil {
+		return state, nil
+	}
+	updated, err := a.postModelHook(ctx, cloneState(state), response, runtime)
+	if err != nil {
+		return AgentState{}, err
+	}
+	return cloneState(updated), nil
+}
+
+func (a *ReactAgent) handlePostModelStep(
+	ctx context.Context,
+	step agentModelStep,
+	runtime AgentRuntime,
+	stepIdx int,
+) (AgentState, *invokeCoreResult, error) {
+	if result, interrupted := a.interruptAfterAgentResult(step.state, step.pendingCalls); interrupted {
+		return AgentState{}, &result, nil
+	}
+	if result, complete, err := a.completeWithoutToolsIfNeeded(ctx, step, runtime, stepIdx); complete || err != nil {
+		return AgentState{}, result, err
+	}
+	if state, reprompt, err := a.handleToolValidationReprompt(ctx, step.state, step.pendingCalls); reprompt || err != nil {
+		return state, nil, err
+	}
+	if result, interrupted := a.interruptBeforeToolsResult(step.state, step.pendingCalls); interrupted {
+		return AgentState{}, &result, nil
+	}
+	return a.executeToolsStep(ctx, step.state, step.pendingCalls)
+}
+
+func (a *ReactAgent) interruptAfterAgentResult(state AgentState, calls []ToolCall) (invokeCoreResult, bool) {
+	if !a.shouldInterruptAfter(agentNodeName) {
+		return invokeCoreResult{}, false
+	}
+	return invokeCoreResult{
+		state: state,
+		interrupts: []graph.Interrupt{
+			buildNodeInterrupt(agentNodeName, a.interruptCfg, a.interruptDesc),
+		},
+		pending: &PendingToolCalls{
+			State: cloneState(state),
+			Calls: cloneToolCalls(calls),
+			Stage: PendingStageAfterAgent,
+		},
+	}, true
+}
+
+func (a *ReactAgent) completeWithoutToolsIfNeeded(
+	ctx context.Context,
+	step agentModelStep,
+	runtime AgentRuntime,
+	stepIdx int,
+) (*invokeCoreResult, bool, error) {
+	if len(step.pendingCalls) == 0 {
+		if err := a.generateStructuredResponse(ctx, &step.state, runtime); err != nil {
+			return nil, true, err
+		}
+		result := invokeCoreResult{state: step.state}
+		return &result, true, nil
+	}
+	if !needsMoreSteps(step.state.RemainingSteps-stepIdx, step.pendingCalls) {
+		return nil, false, nil
+	}
+	step.state.Messages[len(step.state.Messages)-1] = Message{Role: roleAssistant, Name: step.assistant.Name, Content: remainingStepsMsg}
+	if err := a.generateStructuredResponse(ctx, &step.state, runtime); err != nil {
+		return nil, true, err
+	}
+	result := invokeCoreResult{state: step.state}
+	return &result, true, nil
+}
+
+func (a *ReactAgent) handleToolValidationReprompt(
+	ctx context.Context,
+	state AgentState,
+	calls []ToolCall,
+) (AgentState, bool, error) {
+	if a.validationNode == nil {
+		return state, false, nil
+	}
+	validationMessages, err := a.validationNode.Validate(ctx, calls)
+	if err != nil {
+		return AgentState{}, false, err
+	}
+	if !hasValidationErrors(validationMessages) {
+		return state, false, nil
+	}
+	state.Messages = append(state.Messages, toolMessagesToMessages(validationMessages)...)
+	return state, true, nil
+}
+
+func (a *ReactAgent) interruptBeforeToolsResult(state AgentState, calls []ToolCall) (invokeCoreResult, bool) {
+	if !a.shouldInterruptBefore(toolsNodeName) {
+		return invokeCoreResult{}, false
+	}
+	interrupts := make([]graph.Interrupt, 0, len(calls))
+	for _, call := range calls {
+		interrupts = append(interrupts, BuildToolInterrupt(call, a.interruptCfg, a.interruptDesc))
+	}
+	if len(interrupts) == 0 {
+		interrupts = append(interrupts, buildNodeInterrupt(toolsNodeName, a.interruptCfg, a.interruptDesc))
+	}
+	return invokeCoreResult{
+		state:      state,
+		interrupts: interrupts,
+		pending: &PendingToolCalls{
+			State: cloneState(state),
+			Calls: cloneToolCalls(calls),
+			Stage: PendingStageBeforeTools,
+		},
+	}, true
+}
+
+func (a *ReactAgent) executeToolsStep(
+	ctx context.Context,
+	state AgentState,
+	calls []ToolCall,
+) (AgentState, *invokeCoreResult, error) {
+	updatedState, err := a.executeToolCalls(ctx, state, calls)
+	if err != nil {
+		return AgentState{}, nil, err
+	}
+	if result, interrupted := a.interruptAfterToolsResult(updatedState); interrupted {
+		return AgentState{}, &result, nil
+	}
+	if anyReturnDirect(a.toolNode, calls) {
+		result := invokeCoreResult{state: updatedState}
+		return AgentState{}, &result, nil
+	}
+	return updatedState, nil, nil
+}
+
+func (a *ReactAgent) interruptAfterToolsResult(state AgentState) (invokeCoreResult, bool) {
+	if !a.shouldInterruptAfter(toolsNodeName) {
+		return invokeCoreResult{}, false
+	}
+	return invokeCoreResult{
+		state: state,
+		interrupts: []graph.Interrupt{
+			buildNodeInterrupt(toolsNodeName, a.interruptCfg, a.interruptDesc),
+		},
+		pending: &PendingToolCalls{
+			State: cloneState(state),
+			Stage: PendingStageAfterTools,
+		},
+	}, true
 }
 
 func needsMoreSteps(remainingBudget int, pendingCalls []ToolCall) bool {
@@ -934,12 +1150,20 @@ func (a *ReactAgent) executeToolCalls(
 		return state, nil
 	}
 	if a.version == ReactAgentVersionV1 {
-		outputs, err := a.toolNode.RunResultsWithState(ctx, calls, cloneState(state))
-		if err != nil {
-			return AgentState{}, err
-		}
-		return applyToolOutputs(state, outputs)
+		return a.executeToolCallsV1(ctx, state, calls)
 	}
+	return a.executeToolCallsV2(ctx, state, calls)
+}
+
+func (a *ReactAgent) executeToolCallsV1(ctx context.Context, state AgentState, calls []ToolCall) (AgentState, error) {
+	outputs, err := a.toolNode.RunResultsWithState(ctx, calls, cloneState(state))
+	if err != nil {
+		return AgentState{}, err
+	}
+	return applyToolOutputs(state, outputs)
+}
+
+func (a *ReactAgent) executeToolCallsV2(ctx context.Context, state AgentState, calls []ToolCall) (AgentState, error) {
 	baseState := cloneState(state)
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -953,24 +1177,13 @@ func (a *ReactAgent) executeToolCalls(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			outputs, err := a.toolNode.RunResultsWithState(runCtx, []ToolCall{call}, cloneState(baseState))
+			result, err := a.executeSingleToolCall(runCtx, baseState, call)
 			if err != nil {
 				cancel()
-				select {
-				case errCh <- err:
-				default:
-				}
+				trySendError(errCh, err)
 				return
 			}
-			if len(outputs) != 1 {
-				cancel()
-				select {
-				case errCh <- fmt.Errorf("prebuilt: expected single tool output for call %q, got %d", call.ID, len(outputs)):
-				default:
-				}
-				return
-			}
-			results[idx] = outputs[0]
+			results[idx] = result
 		}()
 	}
 	wg.Wait()
@@ -979,13 +1192,37 @@ func (a *ReactAgent) executeToolCalls(
 		return AgentState{}, err
 	default:
 	}
-	out := cloneState(state)
-	updated, applyErr := applyToolOutputs(out, results)
-	if applyErr != nil {
-		return AgentState{}, applyErr
+	return applyToolResultsToState(state, results)
+}
+
+func (a *ReactAgent) executeSingleToolCall(
+	ctx context.Context,
+	baseState AgentState,
+	call ToolCall,
+) (ToolCallResult, error) {
+	outputs, err := a.toolNode.RunResultsWithState(ctx, []ToolCall{call}, cloneState(baseState))
+	if err != nil {
+		return ToolCallResult{}, err
 	}
-	out = updated
-	return out, nil
+	if len(outputs) != 1 {
+		return ToolCallResult{}, fmt.Errorf("prebuilt: expected single tool output for call %q, got %d", call.ID, len(outputs))
+	}
+	return outputs[0], nil
+}
+
+func applyToolResultsToState(state AgentState, results []ToolCallResult) (AgentState, error) {
+	updated, err := applyToolOutputs(cloneState(state), results)
+	if err != nil {
+		return AgentState{}, err
+	}
+	return updated, nil
+}
+
+func trySendError(errCh chan<- error, err error) {
+	select {
+	case errCh <- err:
+	default:
+	}
 }
 
 func applyToolOutputs(state AgentState, outputs []ToolCallResult) (AgentState, error) {

@@ -23,8 +23,25 @@ func generateJSONSchema(t reflect.Type, name string) *JSONSchema {
 	if t == nil {
 		return &JSONSchema{Type: "object"}
 	}
-
+	if schema := generatePrimitiveJSONSchema(t.Kind(), name); schema != nil {
+		return schema
+	}
 	switch t.Kind() {
+	case reflect.Slice, reflect.Array:
+		return generateArrayJSONSchema(t, name)
+	case reflect.Map:
+		return generateMapJSONSchema(name)
+	case reflect.Struct:
+		return generateStructJSONSchema(t, name)
+	case reflect.Ptr:
+		return generateJSONSchema(t.Elem(), name)
+	default:
+		return &JSONSchema{Type: "object", Title: name}
+	}
+}
+
+func generatePrimitiveJSONSchema(kind reflect.Kind, name string) *JSONSchema {
+	switch kind {
 	case reflect.Bool:
 		return &JSONSchema{Type: "boolean", Title: name}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -35,53 +52,65 @@ func generateJSONSchema(t reflect.Type, name string) *JSONSchema {
 		return &JSONSchema{Type: "number", Title: name}
 	case reflect.String:
 		return &JSONSchema{Type: "string", Title: name}
-	case reflect.Slice, reflect.Array:
-		elemSchema := generateJSONSchema(t.Elem(), t.Elem().Name())
-		return &JSONSchema{
-			Type:  "array",
-			Title: name,
-			Items: elemSchema,
-		}
-	case reflect.Map:
-		return &JSONSchema{
-			Type:                 "object",
-			Title:                name,
-			AdditionalProperties: true,
-		}
-	case reflect.Struct:
-		properties := make(map[string]*JSONSchema)
-		for i := 0; i < t.NumField(); i++ {
-			field := t.Field(i)
-			if !field.IsExported() {
-				continue
-			}
-			fieldName := field.Name
-			jsonTag := field.Tag.Get("json")
-			if jsonTag != "" {
-				parts := strings.Split(jsonTag, ",")
-				if parts[0] != "" {
-					fieldName = parts[0]
-				}
-				if parts[0] == "-" {
-					continue
-				}
-			}
-			fieldSchema := generateJSONSchema(field.Type, field.Name)
-			if doc := field.Tag.Get("doc"); doc != "" {
-				fieldSchema.Description = doc
-			}
-			properties[fieldName] = fieldSchema
-		}
-		return &JSONSchema{
-			Type:       "object",
-			Title:      name,
-			Properties: properties,
-		}
-	case reflect.Ptr:
-		return generateJSONSchema(t.Elem(), name)
 	default:
-		return &JSONSchema{Type: "object", Title: name}
+		return nil
 	}
+
+}
+
+func generateArrayJSONSchema(t reflect.Type, name string) *JSONSchema {
+	elemSchema := generateJSONSchema(t.Elem(), t.Elem().Name())
+	return &JSONSchema{Type: "array", Title: name, Items: elemSchema}
+}
+
+func generateMapJSONSchema(name string) *JSONSchema {
+	return &JSONSchema{Type: "object", Title: name, AdditionalProperties: true}
+}
+
+func generateStructJSONSchema(t reflect.Type, name string) *JSONSchema {
+	properties := buildStructProperties(t, nil)
+	return &JSONSchema{Type: "object", Title: name, Properties: properties}
+}
+
+func buildStructProperties(t reflect.Type, channels map[string]Channel) map[string]*JSONSchema {
+	properties := make(map[string]*JSONSchema)
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		fieldName, include := schemaFieldName(field)
+		if !include {
+			continue
+		}
+		fieldSchema := generateJSONSchema(field.Type, field.Name)
+		if channels != nil {
+			if channel, ok := channels[fieldName]; ok {
+				fieldSchema = mergeChannelInfo(fieldSchema, channel)
+			}
+		}
+		if doc := field.Tag.Get("doc"); doc != "" {
+			fieldSchema.Description = doc
+		}
+		properties[fieldName] = fieldSchema
+	}
+	return properties
+}
+
+func schemaFieldName(field reflect.StructField) (name string, include bool) {
+	if !field.IsExported() {
+		return "", false
+	}
+	fieldName := field.Name
+	jsonTag := field.Tag.Get("json")
+	if jsonTag == "" {
+		return fieldName, true
+	}
+	parts := strings.Split(jsonTag, ",")
+	if parts[0] == "-" {
+		return "", false
+	}
+	if parts[0] != "" {
+		fieldName = parts[0]
+	}
+	return fieldName, true
 }
 
 func GetInputJSONSchema(t any, name string) map[string]any {
@@ -149,43 +178,11 @@ func generateJSONSchemaWithChannels(t reflect.Type, channels map[string]Channel,
 	if t == nil {
 		return &JSONSchema{Type: "object"}
 	}
-
-	if t.Kind() == reflect.Struct {
-		properties := make(map[string]*JSONSchema)
-		for i := 0; i < t.NumField(); i++ {
-			field := t.Field(i)
-			if !field.IsExported() {
-				continue
-			}
-			fieldName := field.Name
-			jsonTag := field.Tag.Get("json")
-			if jsonTag != "" {
-				parts := strings.Split(jsonTag, ",")
-				if parts[0] != "" {
-					fieldName = parts[0]
-				}
-				if parts[0] == "-" {
-					continue
-				}
-			}
-
-			fieldSchema := generateJSONSchema(field.Type, field.Name)
-			if ch, ok := channels[fieldName]; ok {
-				fieldSchema = mergeChannelInfo(fieldSchema, ch)
-			}
-			if doc := field.Tag.Get("doc"); doc != "" {
-				fieldSchema.Description = doc
-			}
-			properties[fieldName] = fieldSchema
-		}
-		return &JSONSchema{
-			Type:       "object",
-			Title:      name,
-			Properties: properties,
-		}
+	if t.Kind() != reflect.Struct {
+		return generateJSONSchema(t, name)
 	}
-
-	return generateJSONSchema(t, name)
+	properties := buildStructProperties(t, channels)
+	return &JSONSchema{Type: "object", Title: name, Properties: properties}
 }
 
 func mergeChannelInfo(schema *JSONSchema, _ Channel) *JSONSchema {

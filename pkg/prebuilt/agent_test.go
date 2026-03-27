@@ -1117,6 +1117,52 @@ func TestReactAgent_InterruptBeforeAndAfterNodes(t *testing.T) {
 	}
 }
 
+func TestReactAgent_ResumeAfterAgentInterruptReentersBeforeTools(t *testing.T) {
+	model := &scriptedModel{responses: []prebuilt.ModelResponse{{
+		Content: "call tool",
+		ToolCalls: []prebuilt.ToolCall{{
+			ID:   "1",
+			Name: "echo",
+			Args: map[string]any{"text": "hi"},
+		}},
+	}}}
+
+	executed := 0
+	agent := prebuilt.CreateReactAgent(
+		model,
+		[]prebuilt.Tool{prebuilt.NewToolFunc("echo", func(_ context.Context, args map[string]any) (any, error) {
+			executed++
+			return args["text"], nil
+		})},
+		prebuilt.WithAgentInterruptAfter([]string{"agent"}, prebuilt.HumanInterruptConfig{AllowAccept: true}, "after-agent"),
+		prebuilt.WithInterruptBeforeTools(prebuilt.HumanInterruptConfig{AllowRespond: true}, "before-tools"),
+	)
+
+	first, err := agent.Invoke(context.Background(), prebuilt.AgentState{Messages: []prebuilt.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if first.Pending == nil || first.Pending.Stage != prebuilt.PendingStageAfterAgent {
+		t.Fatalf("first pending = %#v, want after_agent", first.Pending)
+	}
+
+	second, err := agent.Resume(context.Background(), first.Pending, map[string]prebuilt.HumanResponse{
+		"1": prebuilt.RespondHumanResponse("manual"),
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if executed != 0 {
+		t.Fatalf("tool executions = %d, want 0 before before-tools interrupt", executed)
+	}
+	if second.Pending == nil || second.Pending.Stage != prebuilt.PendingStageBeforeTools {
+		t.Fatalf("second pending = %#v, want before_tools", second.Pending)
+	}
+	if len(second.Pending.Calls) != 1 || second.Pending.Calls[0].ID != "1" {
+		t.Fatalf("pending calls = %#v, want original call", second.Pending.Calls)
+	}
+}
+
 func TestReactAgent_VersionAsyncAndToolBindingValidation(t *testing.T) {
 	t.Run("invalid version", func(t *testing.T) {
 		model := &scriptedModel{responses: []prebuilt.ModelResponse{{Content: "done"}}}
