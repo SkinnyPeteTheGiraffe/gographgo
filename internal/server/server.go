@@ -15,6 +15,7 @@ import (
 
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint"
 	graphpkg "github.com/SkinnyPeteTheGiraffe/gographgo/pkg/graph"
+
 	"github.com/google/uuid"
 )
 

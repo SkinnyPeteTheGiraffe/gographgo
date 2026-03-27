@@ -33,7 +33,7 @@ lint:
 	golangci-lint run $(PKGS)
 
 fmt:
-	gofmt -w .
+	go fmt ./...
 
 format: fmt
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/graph"
+
 	"github.com/google/uuid"
 )
 

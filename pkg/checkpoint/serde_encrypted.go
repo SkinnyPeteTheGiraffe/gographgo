@@ -116,7 +116,7 @@ func NewAESGCMCipher(key []byte) (*AESGCMCipher, error) {
 //
 // Accepted formats:
 // - raw key text (length 16/24/32 bytes)
-// - base64-encoded key bytes
+// - base64-encoded key bytes.
 func NewAESGCMCipherFromEnv() (*AESGCMCipher, error) {
 	raw := os.Getenv("LANGGRAPH_AES_KEY")
 	if raw == "" {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint"
+
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
