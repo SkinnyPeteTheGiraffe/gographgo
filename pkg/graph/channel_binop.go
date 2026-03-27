@@ -25,9 +25,9 @@ const legacyOverwriteKey = "__OVERWRITE__"
 // Mirrors Python's langgraph.channels.binop.BinaryOperatorAggregate.
 type BinaryOperatorAggregate struct {
 	val      Dynamic
-	hasValue bool
-	operator func(a, b any) any
 	valueTyp reflect.Type
+	operator func(a, b any) any
+	hasValue bool
 }
 
 // NewBinaryOperatorAggregate creates a new BinaryOperatorAggregate channel

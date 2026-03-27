@@ -7,21 +7,21 @@ import (
 )
 
 type checkpointWire struct {
-	V               int                           `json:"v"`
-	ID              string                        `json:"id"`
-	TS              string                        `json:"ts"`
 	ChannelValues   map[string]any                `json:"channel_values"`
 	ChannelVersions map[string]Version            `json:"channel_versions"`
 	VersionsSeen    map[string]map[string]Version `json:"versions_seen"`
+	ID              string                        `json:"id"`
+	TS              string                        `json:"ts"`
 	UpdatedChannels []string                      `json:"updated_channels,omitempty"`
 	PendingSends    []any                         `json:"pending_sends"`
+	V               int                           `json:"v"`
 }
 
 type checkpointMetadataWire struct {
-	Source  string            `json:"source,omitempty"`
-	Step    int               `json:"step"`
 	Parents map[string]string `json:"parents,omitempty"`
+	Source  string            `json:"source,omitempty"`
 	RunID   string            `json:"run_id,omitempty"`
+	Step    int               `json:"step"`
 }
 
 // MarshalCheckpointForStorage serializes a checkpoint with a stable snake_case

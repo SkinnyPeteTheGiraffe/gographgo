@@ -24,14 +24,11 @@ const (
 //
 // Mirrors Python's langgraph.checkpoint.memory.InMemorySaver.
 type InMemorySaver struct {
-	mu sync.RWMutex
-	// serializer encodes/decodes checkpoint payload values.
 	serializer Serializer
-	// storage: threadID → ns → checkpointID → tuple
-	storage map[string]map[string]map[string]*CheckpointTuple
-	// writes: (threadID, ns, checkpointID) → []PendingWrite
-	writes map[checkpointKey][]PendingWrite
-	blobs  map[blobKey]serializedBlob
+	storage    map[string]map[string]map[string]*CheckpointTuple
+	writes     map[checkpointKey][]PendingWrite
+	blobs      map[blobKey]serializedBlob
+	mu         sync.RWMutex
 }
 
 type checkpointKey struct {
@@ -48,8 +45,8 @@ type blobKey struct {
 }
 
 type serializedBlob struct {
-	empty bool
 	value any
+	empty bool
 }
 
 // NewInMemorySaver creates an empty InMemorySaver.

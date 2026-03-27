@@ -138,20 +138,11 @@ func IsManagedValue(value any) bool {
 
 // PregelScratchpad provides access to runtime information for managed values.
 type PregelScratchpad struct {
-	// Step is the current superstep number
-	Step int
-
-	// Stop is the step at which the graph will stop (recursion limit)
-	Stop int
-
-	// ChannelValues is the current state of all channels
+	Store         Store
 	ChannelValues map[string]any
-
-	// Config is the current run configuration
-	Config *Config
-
-	// Store is the store for cross-thread persistence
-	Store Store
+	Config        *Config
+	Step          int
+	Stop          int
 }
 
 // AddNode adds a typed node to the graph.
@@ -1120,40 +1111,17 @@ func coercePathMap(pathMap any) (map[string]string, error) {
 
 // CompileOptions contains optional configuration for graph compilation.
 type CompileOptions struct {
-	// Checkpointer enables checkpoint persistence
-	Checkpointer checkpoint.Saver
-
-	// Store enables cross-thread persistence via a BaseStore implementation
-	Store Store
-
-	// Cache enables node-level output caching via CachePolicy.
-	Cache Cache
-
-	// Context is static run-scoped context injected into Runtime.
-	Context any
-
-	// InterruptBefore lists nodes to interrupt before execution
+	Checkpointer    checkpoint.Saver
+	Store           Store
+	Cache           Cache
+	Context         any
+	Durability      DurabilityMode
+	Name            string
 	InterruptBefore []string
-
-	// InterruptAfter lists nodes to interrupt after execution
-	InterruptAfter []string
-
-	// Debug enables debug mode
-	Debug bool
-
-	// Durability controls checkpoint persistence timing.
-	Durability DurabilityMode
-
-	// StepTimeout is the default maximum duration for each superstep.
-	// Zero or negative values disable step timeout enforcement.
-	StepTimeout time.Duration
-
-	// MaxConcurrency is the default maximum number of concurrent tasks in one
-	// superstep. Zero or negative values disable concurrency limiting.
-	MaxConcurrency int
-
-	// Name is the name of the compiled graph
-	Name string
+	InterruptAfter  []string
+	StepTimeout     time.Duration
+	MaxConcurrency  int
+	Debug           bool
 }
 
 // Store is the interface for persistent key-value stores.

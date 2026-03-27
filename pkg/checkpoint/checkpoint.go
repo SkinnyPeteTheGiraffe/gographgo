@@ -23,57 +23,25 @@ type Version any
 //
 // Mirrors Python's langgraph.checkpoint.base.Checkpoint.
 type Checkpoint struct {
-	// V is the schema version (currently 1).
-	V int
-
-	// ID is a unique, monotonically increasing identifier that can be used
-	// to sort checkpoints from first to last.
-	ID string
-
-	// TS is the timestamp at which this checkpoint was created.
-	// Stored as RFC3339/RFC3339Nano-compatible text for parity.
-	TS string
-
-	// ChannelValues holds the serialized channel snapshots keyed by channel name.
-	ChannelValues map[string]any
-
-	// ChannelVersions maps channel names to their monotonically increasing
-	// version tokens, used to detect which channels changed.
+	ChannelValues   map[string]any
 	ChannelVersions map[string]Version
-
-	// VersionsSeen maps node IDs to the channel versions they last saw.
-	// Used to determine which tasks need to re-run.
-	VersionsSeen map[string]map[string]Version
-
-	// UpdatedChannels tracks channels updated for this checkpoint (if known).
+	VersionsSeen    map[string]map[string]Version
+	ID              string
+	TS              string
 	UpdatedChannels []string `json:",omitempty"`
-
-	// PendingSends holds Send-based writes that have been queued but not yet
-	// dispatched to a superstep.
-	PendingSends []any
+	PendingSends    []any
+	V               int
 }
 
 // CheckpointMetadata carries additional context recorded alongside a Checkpoint.
 //
 // Mirrors Python's langgraph.checkpoint.base.CheckpointMetadata.
 type CheckpointMetadata struct {
-	// Source indicates how this checkpoint was created.
-	// One of "input", "loop", "update", "fork".
-	Source string
-
-	// Step is the step counter at the time the checkpoint was written.
-	// -1 for the initial "input" checkpoint.
-	Step int
-
-	// Parents maps checkpoint namespace to parent checkpoint ID.
 	Parents map[string]string
-
-	// RunID is the identifier for the run that created this checkpoint.
-	RunID string
-
-	// Extra stores additional metadata fields that are not part of the core
-	// schema. These keys are persisted and participate in metadata filtering.
-	Extra map[string]any `json:"-"`
+	Extra   map[string]any `json:"-"`
+	Source  string
+	RunID   string
+	Step    int
 }
 
 // PendingWrite is a task-scoped write that has been recorded but not yet
@@ -81,14 +49,9 @@ type CheckpointMetadata struct {
 //
 // Mirrors Python's PendingWrite = tuple[task_id, channel, value].
 type PendingWrite struct {
-	// TaskID identifies the task that produced this write.
-	TaskID string
-
-	// Channel is the destination channel name.
+	Value   any
+	TaskID  string
 	Channel string
-
-	// Value is the serialized value to write.
-	Value any
 }
 
 // CheckpointTuple bundles a Checkpoint with its config and related data.

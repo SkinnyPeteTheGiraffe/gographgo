@@ -16,30 +16,24 @@ const (
 
 // Config describes a project-level CLI configuration.
 type Config struct {
-	Name   string            `json:"name,omitempty"`
-	Graphs map[string]string `json:"graphs,omitempty"`
-
-	Dependencies    []string `json:"dependencies,omitempty"`
-	DockerfileLines []string `json:"dockerfile_lines,omitempty"`
-
-	Store        map[string]any `json:"store,omitempty"`
-	Auth         map[string]any `json:"auth,omitempty"`
-	HTTP         map[string]any `json:"http,omitempty"`
-	UI           map[string]any `json:"ui,omitempty"`
-	Webhooks     map[string]any `json:"webhooks,omitempty"`
-	Checkpointer map[string]any `json:"checkpointer,omitempty"`
-
-	DisablePersistence bool `json:"disable_persistence,omitempty"`
-
-	PythonVersion string `json:"python_version,omitempty"`
-	NodeVersion   string `json:"node_version,omitempty"`
-	PIPConfigFile string `json:"pip_config_file,omitempty"`
-
-	Server ServerConfig `json:"server,omitempty"`
-	Run    RunConfig    `json:"run,omitempty"`
-
-	EnvFile string            `json:"env_file,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
+	Webhooks           map[string]any    `json:"webhooks,omitempty"`
+	Checkpointer       map[string]any    `json:"checkpointer,omitempty"`
+	Env                map[string]string `json:"env,omitempty"`
+	Store              map[string]any    `json:"store,omitempty"`
+	Auth               map[string]any    `json:"auth,omitempty"`
+	HTTP               map[string]any    `json:"http,omitempty"`
+	UI                 map[string]any    `json:"ui,omitempty"`
+	Graphs             map[string]string `json:"graphs,omitempty"`
+	Run                RunConfig         `json:"run,omitempty"`
+	Server             ServerConfig      `json:"server,omitempty"`
+	PIPConfigFile      string            `json:"pip_config_file,omitempty"`
+	PythonVersion      string            `json:"python_version,omitempty"`
+	NodeVersion        string            `json:"node_version,omitempty"`
+	Name               string            `json:"name,omitempty"`
+	EnvFile            string            `json:"env_file,omitempty"`
+	DockerfileLines    []string          `json:"dockerfile_lines,omitempty"`
+	Dependencies       []string          `json:"dependencies,omitempty"`
+	DisablePersistence bool              `json:"disable_persistence,omitempty"`
 }
 
 // ServerConfig contains server connectivity and startup options.

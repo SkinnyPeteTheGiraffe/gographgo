@@ -25,19 +25,19 @@ type NamespaceMatchCondition struct {
 
 // StoreItem is a single persisted store record.
 type StoreItem struct {
-	Namespace []string
-	Key       string
-	Value     any
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Value     any
+	Key       string
+	Namespace []string
 }
 
 // StoreSearchItem is a search result record.
 // Score is reserved for ranked search implementations and is nil for
 // non-ranked in-memory search.
 type StoreSearchItem struct {
-	StoreItem
 	Score *float64
+	StoreItem
 }
 
 // StoreGetOptions controls item retrieval behavior.
@@ -62,21 +62,20 @@ type StorePutOptions struct {
 
 // StoreSearchRequest defines store search criteria.
 type StoreSearchRequest struct {
-	NamespacePrefix []string
-	Filter          map[string]any
-	Query           string
-	Limit           int
-	Offset          int
-
+	Filter map[string]any
 	// RefreshTTL controls whether TTL deadlines are refreshed for returned items.
 	// Nil means refresh.
-	RefreshTTL *bool
+	RefreshTTL      *bool
+	Query           string
+	NamespacePrefix []string
+	Limit           int
+	Offset          int
 }
 
 // StoreNamespaceListRequest defines namespace listing criteria.
 type StoreNamespaceListRequest struct {
-	MatchConditions []NamespaceMatchCondition
 	MaxDepth        *int
+	MatchConditions []NamespaceMatchCondition
 	Limit           int
 	Offset          int
 }
@@ -88,41 +87,37 @@ type StoreOp interface {
 
 // StoreGetOp retrieves one item.
 type StoreGetOp struct {
-	Namespace []string
-	Key       string
-
-	// RefreshTTL controls whether TTL deadlines are refreshed on read.
-	// Nil means refresh.
 	RefreshTTL *bool
+	Key        string
+	Namespace  []string
 }
 
 // StorePutOp stores or updates one item.
 // Set Value to nil to delete the key.
 type StorePutOp struct {
-	Namespace []string
-	Key       string
 	Value     any
-	TTL       *time.Duration
 	Index     any
+	TTL       *time.Duration
+	Key       string
+	Namespace []string
 }
 
 // StoreSearchOp searches for items under a namespace prefix.
 type StoreSearchOp struct {
-	NamespacePrefix []string
-	Filter          map[string]any
-	Query           string
-	Limit           int
-	Offset          int
-
+	Filter map[string]any
 	// RefreshTTL controls whether TTL deadlines are refreshed for returned items.
 	// Nil means refresh.
-	RefreshTTL *bool
+	RefreshTTL      *bool
+	Query           string
+	NamespacePrefix []string
+	Limit           int
+	Offset          int
 }
 
 // StoreListNamespacesOp lists namespaces using optional match conditions.
 type StoreListNamespacesOp struct {
-	MatchConditions []NamespaceMatchCondition
 	MaxDepth        *int
+	MatchConditions []NamespaceMatchCondition
 	Limit           int
 	Offset          int
 }

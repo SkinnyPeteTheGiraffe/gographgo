@@ -10,9 +10,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint"
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/graph"
-	"github.com/google/uuid"
 )
 
 const (
@@ -34,17 +35,17 @@ type Message struct {
 
 // AgentState is the default state envelope used by ReactAgent.
 type AgentState struct {
-	Messages           []Message      `json:"messages"`
-	RemainingSteps     int            `json:"remaining_steps,omitempty"`
 	StructuredResponse any            `json:"structured_response,omitempty"`
 	Values             map[string]any `json:"values,omitempty"`
+	Messages           []Message      `json:"messages"`
+	RemainingSteps     int            `json:"remaining_steps,omitempty"`
 }
 
 // ModelResponse is the assistant turn produced by an AgentModel.
 type ModelResponse struct {
 	Content   string
-	ToolCalls []ToolCall
 	Name      string
+	ToolCalls []ToolCall
 }
 
 // AgentModel is the model contract used by CreateReactAgent.
@@ -80,8 +81,8 @@ type PromptFunc func(ctx context.Context, state AgentState, runtime AgentRuntime
 
 // PreModelHookResult is the output from a pre-model hook.
 type PreModelHookResult struct {
-	State            AgentState
 	LLMInputMessages []Message
+	State            AgentState
 }
 
 // PreModelHook runs before model invocation.
@@ -92,8 +93,8 @@ type PostModelHook func(ctx context.Context, state AgentState, response ModelRes
 
 // AgentResponseFormat configures structured response generation.
 type AgentResponseFormat struct {
-	Prompt string
 	Schema any
+	Prompt string
 }
 
 // AgentStateSchema translates custom state shapes to/from AgentState.
@@ -111,10 +112,10 @@ type AgentContextSchema interface {
 type AgentRuntime struct {
 	Context      any
 	Store        graph.Store
+	Metadata     map[string]any
 	ThreadID     string
 	CheckpointID string
 	CheckpointNS string
-	Metadata     map[string]any
 }
 
 // ReactAgentVersion controls tool execution strategy.
@@ -139,62 +140,62 @@ const (
 
 // AgentResult is the invoke result including state and optional interrupts.
 type AgentResult struct {
-	State              AgentState
-	Interrupts         []graph.Interrupt
-	Pending            *PendingToolCalls
 	StructuredResponse any
 	Checkpoint         *checkpoint.Config
+	Pending            *PendingToolCalls
+	Interrupts         []graph.Interrupt
+	State              AgentState
 }
 
 // AgentStateResult returns custom-schema state from InvokeState/ResumeState.
 type AgentStateResult struct {
-	State              any
-	Interrupts         []graph.Interrupt
-	Pending            *PendingToolCalls
 	StructuredResponse any
 	Checkpoint         *checkpoint.Config
+	Pending            *PendingToolCalls
+	State              any
+	Interrupts         []graph.Interrupt
 }
 
 // AgentAsyncResult is delivered by async invoke/resume helpers.
 type AgentAsyncResult struct {
-	Result AgentResult
 	Err    error
+	Result AgentResult
 }
 
 // PendingToolCalls holds deferred tool calls awaiting human responses.
 type PendingToolCalls struct {
-	State AgentState
-	Calls []ToolCall
 	Stage PendingStage
+	Calls []ToolCall
+	State AgentState
 }
 
 // ReactAgent executes a ReAct-style model/tool loop.
 type ReactAgent struct {
+	promptRunnable   PromptRunnable
+	constructionErrs error
+	checkpointer     checkpoint.Saver
+	store            graph.Store
+	contextSchema    AgentContextSchema
+	stateSchema      AgentStateSchema
 	model            AgentModel
+	responseFormat   *AgentResponseFormat
+	interruptAfter   map[string]struct{}
+	preModelHook     PreModelHook
+	postModelHook    PostModelHook
+	promptMessage    *Message
+	validationNode   *ValidationNode
 	modelSelector    AgentModelSelector
 	toolNode         *ToolNode
-	tools            []Tool
-	validationNode   *ValidationNode
-	maxSteps         int
+	interruptBefore  map[string]struct{}
+	promptFunc       PromptFunc
 	name             string
 	version          ReactAgentVersion
 	promptString     string
-	promptMessage    *Message
-	promptFunc       PromptFunc
-	promptRunnable   PromptRunnable
-	responseFormat   *AgentResponseFormat
-	preModelHook     PreModelHook
-	postModelHook    PostModelHook
-	stateSchema      AgentStateSchema
-	contextSchema    AgentContextSchema
-	store            graph.Store
-	checkpointer     checkpoint.Saver
 	checkpointNS     string
-	interruptBefore  map[string]struct{}
-	interruptAfter   map[string]struct{}
-	interruptCfg     HumanInterruptConfig
 	interruptDesc    string
-	constructionErrs error
+	tools            []Tool
+	maxSteps         int
+	interruptCfg     HumanInterruptConfig
 }
 
 // ReactAgentOption configures CreateReactAgent.
@@ -263,11 +264,11 @@ func (f AgentContextSchemaFunc) DecodeContext(value any) (any, error) {
 
 // AgentInvokeOptions controls invoke/resume runtime behavior.
 type AgentInvokeOptions struct {
+	Context      any
+	Metadata     map[string]any
 	ThreadID     string
 	CheckpointID string
 	CheckpointNS string
-	Context      any
-	Metadata     map[string]any
 }
 
 // WithAgentMaxSteps sets the maximum loop iterations.
@@ -746,9 +747,9 @@ func (a *ReactAgent) ResumeAsync(
 }
 
 type invokeCoreResult struct {
-	state      AgentState
-	interrupts []graph.Interrupt
 	pending    *PendingToolCalls
+	interrupts []graph.Interrupt
+	state      AgentState
 }
 
 func (a *ReactAgent) invokeCore(ctx context.Context, state AgentState, runtime AgentRuntime) (invokeCoreResult, error) {

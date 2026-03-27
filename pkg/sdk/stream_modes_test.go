@@ -14,10 +14,10 @@ func TestDecodeStreamPartV2Modes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
+		wantMatch any
 		name      string
 		event     string
 		data      string
-		wantMatch any
 	}{
 		{name: "values", event: "values|root", data: `{"count":1}`, wantMatch: ValuesStreamPart{}},
 		{name: "updates", event: "updates|node1", data: `{"node1":{"done":true}}`, wantMatch: UpdatesStreamPart{}},

@@ -30,17 +30,17 @@ type ToolArgsSchemaProvider interface {
 // Supported schema values:
 //   - `ToolArgsValidator`
 //   - struct values, pointers to structs, or `reflect.Type` for struct types
-//   - functions with one struct parameter (used as schema shape)
+//   - functions with one struct parameter (used as a schema shape)
 type ValidationSchemaSpec struct {
-	Name   string
 	Schema any
+	Name   string
 }
 
 // ToolValidationSchema is the compiled schema entry for one tool.
 type ToolValidationSchema struct {
-	Name      string
-	Source    any
 	Validator ToolArgsValidator
+	Source    any
+	Name      string
 }
 
 // ValidationErrorFormatter turns validation failures into message content.

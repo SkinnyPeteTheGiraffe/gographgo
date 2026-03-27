@@ -127,12 +127,12 @@ func TestInMemoryStoreTTLRefreshBehavior(t *testing.T) {
 func TestInMemoryStoreListNamespacesMatchConditions(t *testing.T) {
 	store := NewInMemoryStore()
 	inputs := []struct {
-		namespace []string
 		key       string
+		namespace []string
 	}{
-		{[]string{"users", "u1", "prefs"}, "a"},
-		{[]string{"users", "u2", "prefs"}, "b"},
-		{[]string{"sessions", "u1", "v1"}, "c"},
+		{key: "a", namespace: []string{"users", "u1", "prefs"}},
+		{key: "b", namespace: []string{"users", "u2", "prefs"}},
+		{key: "c", namespace: []string{"sessions", "u1", "v1"}},
 	}
 	for _, in := range inputs {
 		if err := store.PutItem(context.Background(), in.namespace, in.key, map[string]any{"ok": true}, StorePutOptions{}); err != nil {

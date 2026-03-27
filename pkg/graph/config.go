@@ -12,50 +12,18 @@ import (
 // Thread-scoped fields (ThreadID, CheckpointID, CheckpointNS) are used by
 // checkpoint-aware graphs. At minimum, set ThreadID to enable persistence.
 type Config struct {
-	// RecursionLimit is the maximum number of supersteps before the graph
-	// raises GraphRecursionError. Defaults to 25.
+	Checkpointer   checkpoint.Saver
+	Store          any
+	Cache          any
+	Metadata       map[string]any
+	ThreadID       string
+	CheckpointID   string
+	CheckpointNS   string
+	Durability     DurabilityMode
 	RecursionLimit int
-
-	// Checkpointer enables checkpoint persistence for this run.
-	// When set, the graph saves state between supersteps and supports
-	// interrupt/resume.
-	Checkpointer checkpoint.Saver
-
-	// ThreadID is the primary key for checkpoint storage and retrieval.
-	// Without it, checkpoints cannot be saved or resumed.
-	ThreadID string
-
-	// CheckpointID selects a specific checkpoint to resume from.
-	// When empty, the most recent checkpoint for ThreadID is used.
-	CheckpointID string
-
-	// CheckpointNS is the checkpoint namespace, used to isolate subgraph
-	// checkpoints. Empty string is the root graph.
-	CheckpointNS string
-
-	// Store provides persistent key-value storage accessible from nodes.
-	Store any
-
-	// Cache provides caching of node outputs.
-	Cache any
-
-	// Debug enables debug-level stream events.
-	Debug bool
-
-	// Durability controls checkpoint persistence timing when a checkpointer is
-	// configured. Defaults to DurabilityAsync.
-	Durability DurabilityMode
-
-	// StepTimeout is the maximum amount of time allowed for one superstep to
-	// complete. Zero or negative values disable step timeout enforcement.
-	StepTimeout time.Duration
-
-	// MaxConcurrency limits the number of concurrently running tasks within a
-	// single superstep. Zero or negative values disable the limit.
+	StepTimeout    time.Duration
 	MaxConcurrency int
-
-	// Metadata contains arbitrary per-invocation metadata.
-	Metadata map[string]any
+	Debug          bool
 }
 
 // DefaultConfig returns a Config with sensible defaults.

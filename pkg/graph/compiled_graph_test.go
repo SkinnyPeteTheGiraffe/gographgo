@@ -11,10 +11,9 @@ import (
 )
 
 type countingSaver struct {
-	inner checkpoint.Saver
-
-	mu         sync.Mutex
+	inner      checkpoint.Saver
 	putConfigs []*checkpoint.Config
+	mu         sync.Mutex
 }
 
 func newCountingSaver(inner checkpoint.Saver) *countingSaver {

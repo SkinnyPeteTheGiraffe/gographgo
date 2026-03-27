@@ -421,21 +421,39 @@ func (s *Saver) List(
 	}
 
 	args := make([]any, 0, 4)
+	hasConfig := config != nil
+	hasBefore := opts.Before != nil && opts.Before.CheckpointID != ""
+	hasLimit := opts.Limit > 0
+
 	query := `SELECT thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, checkpoint::text, metadata::text
-FROM checkpoints
-WHERE 1=1`
-	if config != nil {
-		query += fmt.Sprintf(" AND thread_id = $%d AND checkpoint_ns = $%d", len(args)+1, len(args)+2)
+FROM checkpoints`
+	if hasConfig {
 		args = append(args, config.ThreadID, config.CheckpointNS)
 	}
-	if opts.Before != nil && opts.Before.CheckpointID != "" {
-		query += fmt.Sprintf(" AND checkpoint_id < $%d", len(args)+1)
+	if hasBefore {
 		args = append(args, opts.Before.CheckpointID)
 	}
-	query += ` ORDER BY checkpoint_id DESC`
-	if opts.Limit > 0 {
-		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+	if hasLimit {
 		args = append(args, opts.Limit)
+	}
+
+	switch {
+	case hasConfig && hasBefore && hasLimit:
+		query += ` WHERE thread_id = $1 AND checkpoint_ns = $2 AND checkpoint_id < $3 ORDER BY checkpoint_id DESC LIMIT $4`
+	case hasConfig && hasBefore:
+		query += ` WHERE thread_id = $1 AND checkpoint_ns = $2 AND checkpoint_id < $3 ORDER BY checkpoint_id DESC`
+	case hasConfig && hasLimit:
+		query += ` WHERE thread_id = $1 AND checkpoint_ns = $2 ORDER BY checkpoint_id DESC LIMIT $3`
+	case hasConfig:
+		query += ` WHERE thread_id = $1 AND checkpoint_ns = $2 ORDER BY checkpoint_id DESC`
+	case hasBefore && hasLimit:
+		query += ` WHERE checkpoint_id < $1 ORDER BY checkpoint_id DESC LIMIT $2`
+	case hasBefore:
+		query += ` WHERE checkpoint_id < $1 ORDER BY checkpoint_id DESC`
+	case hasLimit:
+		query += ` ORDER BY checkpoint_id DESC LIMIT $1`
+	default:
+		query += ` ORDER BY checkpoint_id DESC`
 	}
 
 	rows, err := s.db.QueryContext(ctx, query, args...)

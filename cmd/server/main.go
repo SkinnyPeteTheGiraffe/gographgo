@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/SkinnyPeteTheGiraffe/gographgo/internal/runtimecfg"
 	"github.com/SkinnyPeteTheGiraffe/gographgo/internal/server"
@@ -15,8 +16,16 @@ func main() {
 	}
 
 	s := server.New(server.Options{Checkpointer: bootstrap.Checkpointer, APIKey: bootstrap.APIKey})
+	httpServer := &http.Server{
+		Addr:              bootstrap.Addr,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	log.Printf("gographgo server listening on %s", bootstrap.Addr)
-	if err := http.ListenAndServe(bootstrap.Addr, s.Handler()); err != nil {
+	if err := httpServer.ListenAndServe(); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }

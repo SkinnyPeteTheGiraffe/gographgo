@@ -68,8 +68,8 @@ func GetEntrypointPrevious(ctx context.Context) any {
 //
 // Tasks run synchronously via Invoke or concurrently via Async.
 type Task[Input, Output any] struct {
-	name string
 	fn   func(ctx context.Context, input Input) (Output, error)
+	name string
 }
 
 // NewTask creates a named callable task.
@@ -151,22 +151,22 @@ type EntrypointOptions struct {
 	Checkpointer checkpoint.Saver
 	Store        Store
 	Context      any
-	Debug        bool
 	Durability   DurabilityMode
 	Name         string
+	Debug        bool
 }
 
 // EntrypointWorkflow is an executable functional workflow.
 //
 // It supports Invoke and Stream interfaces similar to compiled graphs.
 type EntrypointWorkflow[Input, Output any] struct {
-	name         string
-	fn           func(ctx context.Context, input Input) (EntrypointResult[Output], error)
 	checkpointer checkpoint.Saver
 	store        Store
 	contextValue any
-	debug        bool
+	fn           func(ctx context.Context, input Input) (EntrypointResult[Output], error)
+	name         string
 	durability   DurabilityMode
+	debug        bool
 }
 
 // NewEntrypoint creates a functional workflow entrypoint.

@@ -11,8 +11,8 @@ import (
 // InMemoryCache is a process-local Cache implementation for testing and
 // single-process deployments.
 type InMemoryCache struct {
-	mu      sync.RWMutex
 	entries map[string]map[string]cacheEntry
+	mu      sync.RWMutex
 }
 
 type cacheEntry struct {

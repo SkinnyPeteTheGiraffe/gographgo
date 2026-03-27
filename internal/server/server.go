@@ -20,28 +20,27 @@ import (
 
 // Server provides HTTP endpoints for threads/runs/state/events.
 type Server struct {
-	mu           sync.RWMutex
 	checkpointer checkpoint.Saver
 	runner       GraphRunner
 	introspector GraphIntrospector
+	threads      map[string]*Thread
+	runs         map[string]map[string]*runRecord
+	state        map[string]map[string]any
+	store        map[string]map[string]map[string]map[string]any
+	assistants   map[string]*assistantRecord
+	crons        map[string]*Cron
+	globalStore  *graphpkg.InMemoryStore
 	apiKey       string
-
-	threads     map[string]*Thread
-	runs        map[string]map[string]*runRecord
-	state       map[string]map[string]any
-	store       map[string]map[string]map[string]map[string]any
-	assistants  map[string]*assistantRecord
-	crons       map[string]*Cron
-	globalStore *graphpkg.InMemoryStore
+	mu           sync.RWMutex
 }
 
 type runRecord struct {
 	run    *Run
-	events []RunEvent
 	subs   map[int]chan RunEvent
+	done   chan struct{}
+	events []RunEvent
 	nextID int
 	closed bool
-	done   chan struct{}
 }
 
 type assistantRecord struct {
@@ -254,8 +253,8 @@ func (s *Server) handleThreadsSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Metadata map[string]any `json:"metadata,omitempty"`
-		IDs      []string       `json:"ids,omitempty"`
 		Status   string         `json:"status,omitempty"`
+		IDs      []string       `json:"ids,omitempty"`
 		Limit    int            `json:"limit,omitempty"`
 		Offset   int            `json:"offset,omitempty"`
 	}
@@ -330,8 +329,8 @@ func (s *Server) handleThreadsPrune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ThreadIDs []string `json:"thread_ids"`
 		Strategy  string   `json:"strategy,omitempty"`
+		ThreadIDs []string `json:"thread_ids"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -523,7 +522,8 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request, threadID stri
 	w.Header().Set("Content-Location", fmt.Sprintf("/v1/threads/%s/runs/%s", threadID, run.ID))
 	writeJSON(w, http.StatusAccepted, run)
 
-	go s.executeRun(context.Background(), run.ID, threadID)
+	runCtx := context.WithoutCancel(r.Context())
+	go s.executeRun(runCtx, run.ID, threadID)
 }
 
 func (s *Server) createRunLocked(threadID string, req CreateRunRequest) *Run {
@@ -599,7 +599,7 @@ func (s *Server) executeRun(ctx context.Context, runID, threadID string) {
 		cp := checkpoint.EmptyCheckpoint(uuid.New().String())
 		cp.ChannelValues = cloneMap(state)
 		meta := &checkpoint.CheckpointMetadata{Source: "loop", Step: 1, RunID: runID}
-		_, _ = s.checkpointer.Put(context.Background(), &checkpoint.Config{ThreadID: threadID}, cp, meta)
+		_, _ = s.checkpointer.Put(ctx, &checkpoint.Config{ThreadID: threadID}, cp, meta)
 	}
 
 	s.publishEventLocked(rec, RunEvent{Type: "run.completed", ThreadID: threadID, RunID: runID, Timestamp: ended, Payload: map[string]any{"output": cloneMap(result.Output), "status": string(RunStatusSuccess)}})
@@ -688,9 +688,9 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request, threadID st
 	if r.Method == http.MethodPost {
 		var req struct {
 			Values       map[string]any `json:"values"`
+			Checkpoint   map[string]any `json:"checkpoint,omitempty"`
 			AsNode       string         `json:"as_node,omitempty"`
 			CheckpointID string         `json:"checkpoint_id,omitempty"`
-			Checkpoint   map[string]any `json:"checkpoint,omitempty"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -802,10 +802,10 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request, threadID 
 	}
 	if r.Method == http.MethodPost {
 		var req struct {
-			Limit      int            `json:"limit,omitempty"`
 			Before     map[string]any `json:"before,omitempty"`
 			Metadata   map[string]any `json:"metadata,omitempty"`
 			Checkpoint map[string]any `json:"checkpoint,omitempty"`
+			Limit      int            `json:"limit,omitempty"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -863,9 +863,9 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request, threadID st
 			return
 		}
 		var req struct {
+			MaxDepth *int     `json:"max_depth,omitempty"`
 			Prefix   []string `json:"prefix,omitempty"`
 			Suffix   []string `json:"suffix,omitempty"`
-			MaxDepth *int     `json:"max_depth,omitempty"`
 			Limit    int      `json:"limit,omitempty"`
 			Offset   int      `json:"offset,omitempty"`
 		}
@@ -1038,14 +1038,14 @@ func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
 		var req struct {
+			Config      map[string]any `json:"config,omitempty"`
+			Context     map[string]any `json:"context,omitempty"`
+			Metadata    map[string]any `json:"metadata,omitempty"`
 			AssistantID string         `json:"assistant_id,omitempty"`
 			GraphID     string         `json:"graph_id,omitempty"`
 			IfExists    string         `json:"if_exists,omitempty"`
 			Name        string         `json:"name,omitempty"`
 			Description string         `json:"description,omitempty"`
-			Config      map[string]any `json:"config,omitempty"`
-			Context     map[string]any `json:"context,omitempty"`
-			Metadata    map[string]any `json:"metadata,omitempty"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -1212,12 +1212,12 @@ func (s *Server) handleAssistant(w http.ResponseWriter, r *http.Request, assista
 		writeJSON(w, http.StatusOK, assistant)
 	case http.MethodPatch:
 		var req struct {
-			GraphID     string         `json:"graph_id,omitempty"`
-			Name        string         `json:"name,omitempty"`
-			Description string         `json:"description,omitempty"`
 			Config      map[string]any `json:"config,omitempty"`
 			Context     map[string]any `json:"context,omitempty"`
 			Metadata    map[string]any `json:"metadata,omitempty"`
+			GraphID     string         `json:"graph_id,omitempty"`
+			Name        string         `json:"name,omitempty"`
+			Description string         `json:"description,omitempty"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -1475,7 +1475,8 @@ func (s *Server) handleRunsBatch(w http.ResponseWriter, r *http.Request) {
 		run := s.createRunLocked(threadID, req)
 		s.mu.Unlock()
 		s.publishEvent(threadID, run.ID, RunEvent{Type: "run.created", ThreadID: threadID, RunID: run.ID, Timestamp: now, Payload: map[string]any{"status": string(RunStatusPending)}})
-		go s.executeRun(context.Background(), run.ID, threadID)
+		runCtx := context.WithoutCancel(r.Context())
+		go s.executeRun(runCtx, run.ID, threadID)
 		out = append(out, *run)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -1488,8 +1489,8 @@ func (s *Server) handleRunsCancelMany(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		ThreadID string   `json:"thread_id,omitempty"`
-		RunIDs   []string `json:"run_ids,omitempty"`
 		Status   string   `json:"status,omitempty"`
+		RunIDs   []string `json:"run_ids,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1589,7 +1590,8 @@ func (s *Server) streamCreateRun(w http.ResponseWriter, r *http.Request, threadI
 	s.mu.Unlock()
 
 	s.publishEvent(threadID, run.ID, RunEvent{Type: "run.created", ThreadID: threadID, RunID: run.ID, Timestamp: now, Payload: map[string]any{"status": string(RunStatusPending)}})
-	go s.executeRun(context.Background(), run.ID, threadID)
+	runCtx := context.WithoutCancel(r.Context())
+	go s.executeRun(runCtx, run.ID, threadID)
 
 	modes := normalizeStreamModes(req.StreamMode)
 	query := url.Values{}
@@ -1750,8 +1752,8 @@ func (s *Server) streamJoinedRun(w http.ResponseWriter, r *http.Request, threadI
 }
 
 type streamPart struct {
-	Event   string
 	Payload any
+	Event   string
 }
 
 func normalizeStreamModes(raw []string) []string {
@@ -1911,11 +1913,11 @@ func (s *Server) handleGlobalStoreItems(w http.ResponseWriter, r *http.Request) 
 	switch r.Method {
 	case http.MethodPut:
 		var req struct {
-			Namespace []string       `json:"namespace"`
-			Key       string         `json:"key"`
-			Value     map[string]any `json:"value"`
 			Index     any            `json:"index,omitempty"`
+			Value     map[string]any `json:"value"`
 			TTL       *int           `json:"ttl,omitempty"`
+			Key       string         `json:"key"`
+			Namespace []string       `json:"namespace"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -1965,8 +1967,8 @@ func (s *Server) handleGlobalStoreItems(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, cloneStoreItem(&response))
 	case http.MethodDelete:
 		var req struct {
-			Namespace []string `json:"namespace"`
 			Key       string   `json:"key"`
+			Namespace []string `json:"namespace"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -1992,12 +1994,12 @@ func (s *Server) handleGlobalStoreSearch(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
+		Filter          map[string]any `json:"filter,omitempty"`
+		RefreshTTL      *bool          `json:"refresh_ttl,omitempty"`
+		Query           string         `json:"query,omitempty"`
 		NamespacePrefix []string       `json:"namespace_prefix"`
 		Limit           int            `json:"limit,omitempty"`
 		Offset          int            `json:"offset,omitempty"`
-		Filter          map[string]any `json:"filter,omitempty"`
-		Query           string         `json:"query,omitempty"`
-		RefreshTTL      *bool          `json:"refresh_ttl,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -2030,9 +2032,9 @@ func (s *Server) handleGlobalStoreNamespaces(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var req struct {
+		MaxDepth *int     `json:"max_depth,omitempty"`
 		Prefix   []string `json:"prefix,omitempty"`
 		Suffix   []string `json:"suffix,omitempty"`
-		MaxDepth *int     `json:"max_depth,omitempty"`
 		Limit    int      `json:"limit,omitempty"`
 		Offset   int      `json:"offset,omitempty"`
 	}
@@ -2108,11 +2110,11 @@ func (s *Server) handleThreadCrons(w http.ResponseWriter, r *http.Request, threa
 
 func (s *Server) createCron(w http.ResponseWriter, r *http.Request, threadID string) {
 	var req struct {
-		AssistantID string         `json:"assistant_id,omitempty"`
-		Schedule    string         `json:"schedule,omitempty"`
 		Input       map[string]any `json:"input,omitempty"`
 		Enabled     *bool          `json:"enabled,omitempty"`
 		EndTime     *time.Time     `json:"end_time,omitempty"`
+		AssistantID string         `json:"assistant_id,omitempty"`
+		Schedule    string         `json:"schedule,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -2143,11 +2145,11 @@ func (s *Server) createCron(w http.ResponseWriter, r *http.Request, threadID str
 
 func (s *Server) updateCron(w http.ResponseWriter, r *http.Request, cronID string) {
 	var req struct {
-		AssistantID string         `json:"assistant_id,omitempty"`
-		Schedule    string         `json:"schedule,omitempty"`
 		Input       map[string]any `json:"input,omitempty"`
 		Enabled     *bool          `json:"enabled,omitempty"`
 		EndTime     *time.Time     `json:"end_time,omitempty"`
+		AssistantID string         `json:"assistant_id,omitempty"`
+		Schedule    string         `json:"schedule,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -2201,9 +2203,9 @@ func (s *Server) searchCrons(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
+		Enabled     *bool  `json:"enabled,omitempty"`
 		AssistantID string `json:"assistant_id,omitempty"`
 		ThreadID    string `json:"thread_id,omitempty"`
-		Enabled     *bool  `json:"enabled,omitempty"`
 		Limit       int    `json:"limit,omitempty"`
 		Offset      int    `json:"offset,omitempty"`
 	}
@@ -2646,12 +2648,12 @@ func writeSSEWithID(w http.ResponseWriter, event string, payload any, id int) er
 		if evt.Type == "" {
 			evt.Type = event
 		}
-		if _, err := fmt.Fprintf(w, "id: %d\n", id); err != nil {
+		if _, err := w.Write([]byte("id: " + strconv.Itoa(id) + "\n")); err != nil {
 			return err
 		}
 		return writeSSE(w, evt)
 	}
-	if _, err := fmt.Fprintf(w, "id: %d\n", id); err != nil {
+	if _, err := w.Write([]byte("id: " + strconv.Itoa(id) + "\n")); err != nil {
 		return err
 	}
 	return writeSSEMode(w, event, payload)

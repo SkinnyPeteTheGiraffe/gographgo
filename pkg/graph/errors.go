@@ -97,8 +97,8 @@ func (e *EmptyChannelError) Error() string {
 
 // GraphBubbleUp is the base type for exceptions that bubble up through the graph.
 type GraphBubbleUp struct {
-	Message string
 	Value   any
+	Message string
 }
 
 func (e *GraphBubbleUp) Error() string {

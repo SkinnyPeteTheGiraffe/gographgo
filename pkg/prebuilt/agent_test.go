@@ -15,12 +15,12 @@ import (
 )
 
 type scriptedModel struct {
-	mu                 sync.Mutex
 	responses          []prebuilt.ModelResponse
 	structuredResponse any
+	inputs             [][]prebuilt.Message
+	mu                 sync.Mutex
 	structuredCalls    int
 	idx                int
-	inputs             [][]prebuilt.Message
 }
 
 func (m *scriptedModel) Generate(_ context.Context, messages []prebuilt.Message) (prebuilt.ModelResponse, error) {
@@ -90,8 +90,8 @@ func (m *selectorModel) Generate(_ context.Context, _ []prebuilt.Message) (prebu
 
 type boundModel struct {
 	responses []prebuilt.ModelResponse
-	idx       int
 	bound     []string
+	idx       int
 }
 
 func (m *boundModel) Generate(_ context.Context, _ []prebuilt.Message) (prebuilt.ModelResponse, error) {
@@ -120,9 +120,9 @@ func (testStore) Search(_ []string, _ string, _ int) ([]string, error) {
 }
 
 type customState struct {
+	Structured any
 	History    []prebuilt.Message
 	Steps      int
-	Structured any
 }
 
 type customStateSchema struct{}
@@ -473,8 +473,8 @@ func TestReactAgent_V2ExecutesToolCallsConcurrentlyWithStableOutputOrder(t *test
 	testCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	type invokeResult struct {
-		result prebuilt.AgentResult
 		err    error
+		result prebuilt.AgentResult
 	}
 	resultCh := make(chan invokeResult, 1)
 	go func() {

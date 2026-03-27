@@ -132,9 +132,9 @@ type BuildOptions struct {
 	Tag         string
 	Dockerfile  string
 	ContextPath string
+	BuildArgs   []string
 	Pull        bool
 	NoCache     bool
-	BuildArgs   []string
 }
 
 // Build builds a container image for the local server runtime.
@@ -271,12 +271,12 @@ func Dockerfile(_ context.Context, stdout io.Writer, opts DockerfileOptions) err
 	if _, err := os.Stat(outputPath); err == nil && !opts.Overwrite {
 		return fmt.Errorf("file already exists at %s (pass --overwrite to replace)", outputPath)
 	}
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
 		return err
 	}
 
 	content := renderDockerfile(builderImage, baseImage, cfg.DockerfileLines)
-	if err := os.WriteFile(outputPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(outputPath, []byte(content), 0o600); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(stdout, "wrote %s\n", outputPath)

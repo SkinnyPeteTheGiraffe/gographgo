@@ -29,9 +29,9 @@ const (
 
 // ToolCall is a single model-requested tool invocation.
 type ToolCall struct {
+	Args map[string]any `json:"args"`
 	ID   string         `json:"id"`
 	Name string         `json:"name"`
-	Args map[string]any `json:"args"`
 }
 
 // ToolMessage is the result envelope returned by ToolNode.
@@ -39,9 +39,9 @@ type ToolMessage struct {
 	ToolCallID string `json:"tool_call_id"`
 	Name       string `json:"name"`
 	Content    string `json:"content"`
+	Status     string `json:"status,omitempty"`
 	// ContentBlocks carries structured block content output when returned by tools.
 	ContentBlocks []map[string]any `json:"content_blocks,omitempty"`
-	Status        string           `json:"status,omitempty"`
 }
 
 // ToolCommand allows tools to update state and direct control flow.
@@ -59,12 +59,12 @@ type Tool interface {
 
 // ToolRuntime carries invocation-scoped runtime values for tools.
 type ToolRuntime struct {
-	ToolCallID   string
 	State        any
-	Config       graph.Config
-	Store        graph.Store
 	Context      any
+	Store        graph.Store
 	StreamWriter func(any)
+	ToolCallID   string
+	Config       graph.Config
 }
 
 // RuntimeAwareTool can receive a full runtime object during invocation.
@@ -89,11 +89,11 @@ type ReturnDirectTool interface {
 
 // ToolFunc adapts a function into a Tool implementation.
 type ToolFunc struct {
-	name         string
 	fn           func(context.Context, map[string]any) (any, error)
 	runtimeFn    func(context.Context, map[string]any, ToolRuntime) (any, error)
 	stateFn      func(context.Context, map[string]any, any) (any, error)
 	storeFn      func(context.Context, map[string]any, graph.Store) (any, error)
+	name         string
 	returnDirect bool
 }
 
@@ -233,9 +233,9 @@ func (e *ToolInvocationError) Unwrap() error {
 
 // ToolCallRequest is passed to an interceptor around tool execution.
 type ToolCallRequest struct {
-	ToolCall ToolCall
 	Tool     Tool
 	State    any
+	ToolCall ToolCall
 }
 
 // Override returns a shallow clone with selected overrides applied.
@@ -292,11 +292,11 @@ func DefaultToolErrorFilter(err error) bool {
 type ToolNode struct {
 	toolsByName      map[string]Tool
 	validatorsByName map[string]ToolArgsValidator
-	handleToolErrors bool
 	errorHandler     ToolErrorHandler
 	errorFilter      ToolErrorFilter
 	wrapToolCall     ToolCallWrapper
 	wrapToolResult   ToolCallResultWrapper
+	handleToolErrors bool
 }
 
 // ToolNodeOption configures ToolNode behavior.

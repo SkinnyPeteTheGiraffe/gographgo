@@ -52,10 +52,10 @@ type StoreClient struct {
 
 // Config configures the SDK client.
 type Config struct {
-	BaseURL    string
 	HTTPClient *http.Client
-	APIKey     string
 	Headers    map[string]string
+	BaseURL    string
+	APIKey     string
 }
 
 // New creates a new SDK client.

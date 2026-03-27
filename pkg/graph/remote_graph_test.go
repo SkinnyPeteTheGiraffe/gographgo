@@ -19,10 +19,10 @@ func TestRemoteGraph_InvokeGetUpdateStateAndHistory(t *testing.T) {
 	t.Parallel()
 
 	type captures struct {
-		sync.Mutex
 		invokeThread string
-		invokeReq    sdk.RunCreateRequest
 		updateReqs   []sdk.ThreadUpdateStateRequest
+		invokeReq    sdk.RunCreateRequest
+		sync.Mutex
 	}
 	cap := &captures{}
 
@@ -184,10 +184,10 @@ func TestRemoteGraph_AssistantIntrospection(t *testing.T) {
 	t.Parallel()
 
 	type captures struct {
-		sync.Mutex
 		graphXray        string
 		subgraphsRecurse string
 		subgraphsPath    string
+		sync.Mutex
 	}
 	cap := &captures{}
 
@@ -282,8 +282,8 @@ func TestRemoteGraph_StreamAndTypedStream(t *testing.T) {
 	t.Parallel()
 
 	type captures struct {
-		sync.Mutex
 		streamReqs []sdk.RunStreamRequest
+		sync.Mutex
 	}
 	cap := &captures{}
 
@@ -369,10 +369,10 @@ func TestRemoteGraph_ThreadlessInvokeAndStream(t *testing.T) {
 	t.Parallel()
 
 	type captures struct {
-		sync.Mutex
 		createRunPath    string
 		streamCreatePath string
 		getRunPath       string
+		sync.Mutex
 	}
 	cap := &captures{}
 

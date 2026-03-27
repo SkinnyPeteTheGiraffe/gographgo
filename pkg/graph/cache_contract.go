@@ -7,21 +7,21 @@ import (
 
 // CacheLookupKey identifies one cache entry by namespace and key.
 type CacheLookupKey struct {
-	Namespace []string
 	Key       string
+	Namespace []string
 }
 
 // CacheHit is one retrieved cache entry.
 type CacheHit struct {
-	Key   CacheLookupKey
 	Value any
+	Key   CacheLookupKey
 }
 
 // CacheSetPair is one cache value write with an optional TTL.
 type CacheSetPair struct {
-	Key   CacheLookupKey
 	Value any
 	TTL   *time.Duration
+	Key   CacheLookupKey
 }
 
 // BatchCache defines cache capabilities used by runtime and standalone callers.

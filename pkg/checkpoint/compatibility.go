@@ -19,9 +19,9 @@ var ErrUnsupportedPersistenceFormat = errors.New("checkpoint: unsupported persis
 // UnsupportedPersistenceFormatError carries backend-specific details when
 // persisted checkpoint rows cannot be decoded with the active policy.
 type UnsupportedPersistenceFormatError struct {
+	Cause   error
 	Backend string
 	Detail  string
-	Cause   error
 }
 
 func (e *UnsupportedPersistenceFormatError) Error() string {

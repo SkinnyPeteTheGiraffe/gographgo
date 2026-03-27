@@ -15,8 +15,8 @@ import (
 // InMemoryStore is a process-local Store implementation for testing and
 // development.
 type InMemoryStore struct {
-	mu      sync.RWMutex
 	entries map[string]map[string]storeEntry
+	mu      sync.RWMutex
 }
 
 type storeEntry struct {

@@ -21,11 +21,11 @@ const (
 // `UIMessage` and `RemoveUIMessage` are aliases of this type so callers can use
 // intent-revealing names while sharing a single reducer-friendly representation.
 type AnyUIMessage struct {
+	Props    map[string]any `json:"props,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
 	Type     string         `json:"type"`
 	ID       string         `json:"id"`
 	Name     string         `json:"name,omitempty"`
-	Props    map[string]any `json:"props,omitempty"`
-	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // UIMessage is a UI add/update event.
@@ -41,12 +41,12 @@ type UIState struct {
 
 // UIPushOptions configures PushUIMessage behavior.
 type UIPushOptions struct {
-	ID        string
 	Metadata  map[string]any
+	ID        string
 	MessageID string
 	StateKey  string
-	Merge     bool
 	Namespace []string
+	Merge     bool
 }
 
 // UIDeleteOptions configures DeleteUIMessage behavior.

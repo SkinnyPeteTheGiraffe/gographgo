@@ -152,8 +152,8 @@ func (s strictSchema) Validate() error {
 }
 
 type providerTool struct {
-	name   string
 	schema any
+	name   string
 }
 
 func (t providerTool) Name() string {

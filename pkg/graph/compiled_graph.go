@@ -15,18 +15,18 @@ import (
 // It provides Invoke and Stream methods for graph execution, backed by the
 // Pregel superstep runtime.
 type CompiledStateGraph[State, Context, Input, Output any] struct {
-	builder         *StateGraph[State, Context, Input, Output]
 	checkpointer    checkpoint.Saver
 	store           Store
 	cache           Cache
 	contextValue    any
-	interruptBefore []string
-	interruptAfter  []string
-	debug           bool
+	builder         *StateGraph[State, Context, Input, Output]
 	name            string
 	durability      DurabilityMode
+	interruptBefore []string
+	interruptAfter  []string
 	stepTimeout     time.Duration
 	maxConcurrency  int
+	debug           bool
 }
 
 // Invoke executes the graph with the given input and returns the final state.

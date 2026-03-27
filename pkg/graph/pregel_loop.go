@@ -22,8 +22,6 @@ type pregelLoopResult struct {
 // pregelLoopOptions carries the runtime parameters for a Pregel superstep loop.
 type pregelLoopOptions[State, Context, Input, Output any] struct {
 	graph           *StateGraph[State, Context, Input, Output]
-	input           Input
-	config          Config
 	store           Store
 	cache           Cache
 	contextValue    any
@@ -31,6 +29,8 @@ type pregelLoopOptions[State, Context, Input, Output any] struct {
 	streamModes     streamModeSet
 	interruptBefore []string // from CompiledStateGraph
 	interruptAfter  []string // from CompiledStateGraph
+	input           Input
+	config          Config
 }
 
 // runPregelLoop executes the Pregel superstep loop for a compiled StateGraph.
@@ -218,7 +218,7 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 
 		// --- execute tasks (concurrent) ---
 		results, taskErr := executeTasks(ctx, g, tasks, executeTasksOptions{
-			config:         config,
+			config:         &config,
 			stepTimeout:    config.StepTimeout,
 			maxConcurrency: config.MaxConcurrency,
 			store:          effectiveStore(config, opts.store),
@@ -382,7 +382,7 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 
 		// --- checkpoint ---
 		checkpointByDurability(ctx, durability, asyncCheckpoint, checkpointSnapshot{
-			config:          config,
+			config:          &config,
 			channels:        channels,
 			step:            step,
 			channelVersions: channelVersions,
@@ -443,18 +443,18 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 // Mirrors Python LangGraph's BackgroundExecutor / AsyncBackgroundExecutor
 // parallel task execution model.
 type executeTasksOptions struct {
-	config         Config
-	stepTimeout    time.Duration
-	maxConcurrency int
+	config         *Config
 	store          Store
 	cache          Cache
 	contextValue   any
-	isReplaying    bool
-	step           int
-	stop           int
 	streamOut      chan<- StreamPart
 	streamModes    streamModeSet
 	namespace      []string
+	stepTimeout    time.Duration
+	maxConcurrency int
+	step           int
+	stop           int
+	isReplaying    bool
 }
 
 func executeTasks[State, Context, Input, Output any](
@@ -611,17 +611,17 @@ func executeCallTask[State any](ctx context.Context, task pregelTask[State], opt
 // executeTask runs a single node function, handling interrupt signals and
 // Command return values.
 type executeTaskOptions[State any] struct {
-	config       Config
+	config       *Config
 	store        Store
 	cache        Cache
 	contextValue any
-	isReplaying  bool
-	step         int
-	stop         int
 	managed      map[string]ManagedValueSpec
 	streamOut    chan<- StreamPart
 	streamModes  streamModeSet
 	namespace    []string
+	step         int
+	stop         int
+	isReplaying  bool
 }
 
 func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pregelTask[State], opts executeTaskOptions[State]) pregelTaskResult {
@@ -634,7 +634,11 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 	sp := &taskScratchpad{resume: task.resumeValues}
 	taskCtx := context.WithValue(ctx, taskIDContextKey{}, task.id)
 	taskCtx = withTaskScratchpad(taskCtx, sp)
-	taskCtx = WithConfig(taskCtx, opts.config)
+	cfg := DefaultConfig()
+	if opts.config != nil {
+		cfg = *opts.config
+	}
+	taskCtx = WithConfig(taskCtx, cfg)
 	if opts.store != nil {
 		taskCtx = WithStore(taskCtx, opts.store)
 	}
@@ -655,7 +659,7 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 	pgScratch := &PregelScratchpad{
 		Step:          opts.step,
 		Stop:          opts.stop,
-		Config:        &opts.config,
+		Config:        &cfg,
 		Store:         opts.store,
 		ChannelValues: stateToChannelValues(task.input),
 	}
@@ -1218,17 +1222,17 @@ func saveCheckpoint(
 }
 
 type checkpointSnapshot struct {
-	config          Config
+	config          *Config
 	channels        *pregelChannelMap
-	step            int
 	channelVersions map[string]int64
 	versionsSeen    map[string]map[string]int64
+	streamOut       chan<- StreamPart
+	streamModes     streamModeSet
 	updatedChannels []string
 	next            []string
 	pendingWrites   []checkpoint.PendingWrite
-	streamOut       chan<- StreamPart
-	streamModes     streamModeSet
 	namespace       []string
+	step            int
 }
 
 type checkpointAsyncWriter struct {
@@ -1249,14 +1253,14 @@ func (w *checkpointAsyncWriter) Wait() {
 }
 
 func checkpointByDurability(ctx context.Context, durability DurabilityMode, writer *checkpointAsyncWriter, snap checkpointSnapshot) {
-	if snap.config.Checkpointer == nil || snap.config.ThreadID == "" {
+	if snap.config == nil || snap.config.Checkpointer == nil || snap.config.ThreadID == "" {
 		return
 	}
 	switch durability {
 	case DurabilityExit:
 		return
 	case DurabilityAsync:
-		configCopy := snap.config
+		configCopy := *snap.config
 		channelsCopy := snap.channels.snapshot()
 		channelVersionsCopy := cloneVersionMap(snap.channelVersions)
 		versionsSeenCopy := cloneNestedVersionMap(snap.versionsSeen)
@@ -1268,7 +1272,7 @@ func checkpointByDurability(ctx context.Context, durability DurabilityMode, writ
 			saveCheckpointFromSnapshot(ctx, configCopy, channelsCopy, snap.step, channelVersionsCopy, versionsSeenCopy, updatedChannelsCopy, nextCopy, pendingWritesCopy, snap.streamOut, snap.streamModes, namespaceCopy)
 		})
 	default:
-		saveCheckpoint(ctx, snap.config, snap.channels, snap.step, snap.channelVersions, snap.versionsSeen, snap.updatedChannels, snap.next, snap.pendingWrites, snap.streamOut, snap.streamModes, snap.namespace)
+		saveCheckpoint(ctx, *snap.config, snap.channels, snap.step, snap.channelVersions, snap.versionsSeen, snap.updatedChannels, snap.next, snap.pendingWrites, snap.streamOut, snap.streamModes, snap.namespace)
 	}
 }
 
