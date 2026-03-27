@@ -437,19 +437,9 @@ func (g *CompiledStateGraph[State, Context, Input, Output]) BulkUpdateState(ctx 
 	}
 	current := *config
 	for i, superstep := range supersteps {
-		if len(superstep) == 0 {
-			return nil, fmt.Errorf("superstep %d has no updates", i)
-		}
-		updates := make(map[string]any)
-		for _, update := range superstep {
-			if update.AsNode != nil && *update.AsNode != "" {
-				if _, ok := g.builder.nodes[*update.AsNode]; !ok {
-					return nil, fmt.Errorf("superstep %d references unknown node %q", i, *update.AsNode)
-				}
-			}
-			for k, v := range update.Values {
-				updates[k] = v
-			}
+		updates, err := g.superstepUpdates(i, superstep)
+		if err != nil {
+			return nil, err
 		}
 		next, err := g.UpdateStateWithConfig(ctx, &current, updates)
 		if err != nil {
@@ -460,6 +450,32 @@ func (g *CompiledStateGraph[State, Context, Input, Output]) BulkUpdateState(ctx 
 		}
 	}
 	return &current, nil
+}
+
+func (g *CompiledStateGraph[State, Context, Input, Output]) superstepUpdates(index int, superstep []StateUpdate) (map[string]any, error) {
+	if len(superstep) == 0 {
+		return nil, fmt.Errorf("superstep %d has no updates", index)
+	}
+	updates := make(map[string]any)
+	for _, update := range superstep {
+		if err := g.validateStateUpdateNode(index, update); err != nil {
+			return nil, err
+		}
+		for k, v := range update.Values {
+			updates[k] = v
+		}
+	}
+	return updates, nil
+}
+
+func (g *CompiledStateGraph[State, Context, Input, Output]) validateStateUpdateNode(index int, update StateUpdate) error {
+	if update.AsNode == nil || *update.AsNode == "" {
+		return nil
+	}
+	if _, ok := g.builder.nodes[*update.AsNode]; ok {
+		return nil
+	}
+	return fmt.Errorf("superstep %d references unknown node %q", index, *update.AsNode)
 }
 
 func subgraphCheckpointNamespaceWithMode(parentNS, nodeName, taskID string, mode SubgraphPersistenceMode) string {

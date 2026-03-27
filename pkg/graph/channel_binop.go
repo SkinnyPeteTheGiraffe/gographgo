@@ -75,6 +75,13 @@ func instantiateAggregateValue(t reflect.Type) (any, bool) {
 }
 
 func overwriteValue(value any) (any, bool) {
+	if overwrite, ok := overwriteFromConcreteType(value); ok {
+		return overwrite, true
+	}
+	return overwriteFromReflectedMap(value)
+}
+
+func overwriteFromConcreteType(value any) (any, bool) {
 	switch v := value.(type) {
 	case Overwrite:
 		return v.Value, true
@@ -84,31 +91,41 @@ func overwriteValue(value any) (any, bool) {
 		}
 		return v.Value, true
 	case map[string]any:
-		if len(v) == 1 {
-			if ov, ok := v[overwriteKey]; ok {
-				if d, isDyn := ov.(Dynamic); isDyn {
-					return d.Value(), true
-				}
-				return ov, true
-			}
-			if ov, ok := v[legacyOverwriteKey]; ok {
-				if d, isDyn := ov.(Dynamic); isDyn {
-					return d.Value(), true
-				}
-				return ov, true
-			}
-		}
+		return overwriteFromAnyMap(v)
 	case map[string]Dynamic:
-		if len(v) == 1 {
-			if ov, ok := v[overwriteKey]; ok {
-				return ov.Value(), true
-			}
-			if ov, ok := v[legacyOverwriteKey]; ok {
-				return ov.Value(), true
-			}
-		}
+		return overwriteFromDynamicMap(v)
+	default:
+		return nil, false
 	}
+}
 
+func overwriteFromAnyMap(values map[string]any) (any, bool) {
+	if len(values) != 1 {
+		return nil, false
+	}
+	if ov, ok := values[overwriteKey]; ok {
+		return unwrapDynamic(ov), true
+	}
+	if ov, ok := values[legacyOverwriteKey]; ok {
+		return unwrapDynamic(ov), true
+	}
+	return nil, false
+}
+
+func overwriteFromDynamicMap(values map[string]Dynamic) (any, bool) {
+	if len(values) != 1 {
+		return nil, false
+	}
+	if ov, ok := values[overwriteKey]; ok {
+		return ov.Value(), true
+	}
+	if ov, ok := values[legacyOverwriteKey]; ok {
+		return ov.Value(), true
+	}
+	return nil, false
+}
+
+func overwriteFromReflectedMap(value any) (any, bool) {
 	rv := reflect.ValueOf(value)
 	if !rv.IsValid() || rv.Kind() != reflect.Map || rv.Len() != 1 {
 		return nil, false
@@ -121,11 +138,14 @@ func overwriteValue(value any) (any, bool) {
 	if !ok || (key != overwriteKey && key != legacyOverwriteKey) {
 		return nil, false
 	}
-	mapValue := iter.Value().Interface()
-	if d, isDyn := mapValue.(Dynamic); isDyn {
-		return d.Value(), true
+	return unwrapDynamic(iter.Value().Interface()), true
+}
+
+func unwrapDynamic(value any) any {
+	if d, isDyn := value.(Dynamic); isDyn {
+		return d.Value()
 	}
-	return mapValue, true
+	return value
 }
 
 func isAnonymousOperator(op func(a, b any) any) bool {

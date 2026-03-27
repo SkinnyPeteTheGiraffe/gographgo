@@ -429,23 +429,14 @@ func (s *InMemoryStore) ListNamespaces(ctx context.Context, req StoreNamespaceLi
 
 	namespaceSet := make(map[string][]string)
 	for nsKey, nsEntries := range s.entries {
-		for key, entry := range nsEntries {
-			if isStoreEntryExpired(entry, now) {
-				delete(nsEntries, key)
-			}
-		}
-		if len(nsEntries) == 0 {
+		if pruneExpiredStoreEntries(nsEntries, now) {
 			delete(s.entries, nsKey)
 			continue
 		}
-		namespace := expandStoreNamespace(nsKey)
-		if !matchesNamespaceConditions(namespace, req.MatchConditions) {
-			continue
+		namespace, ok := listableNamespace(nsKey, req)
+		if ok {
+			namespaceSet[flattenStoreNamespace(namespace)] = namespace
 		}
-		if req.MaxDepth != nil && *req.MaxDepth >= 0 && len(namespace) > *req.MaxDepth {
-			namespace = append([]string(nil), namespace[:*req.MaxDepth]...)
-		}
-		namespaceSet[flattenStoreNamespace(namespace)] = namespace
 	}
 
 	out := make([][]string, 0, len(namespaceSet))
@@ -470,6 +461,26 @@ func (s *InMemoryStore) ListNamespaces(ctx context.Context, req StoreNamespaceLi
 		end = start + req.Limit
 	}
 	return out[start:end], nil
+}
+
+func pruneExpiredStoreEntries(entries map[string]storeEntry, now time.Time) bool {
+	for key, entry := range entries {
+		if isStoreEntryExpired(entry, now) {
+			delete(entries, key)
+		}
+	}
+	return len(entries) == 0
+}
+
+func listableNamespace(nsKey string, req StoreNamespaceListRequest) ([]string, bool) {
+	namespace := expandStoreNamespace(nsKey)
+	if !matchesNamespaceConditions(namespace, req.MatchConditions) {
+		return nil, false
+	}
+	if req.MaxDepth != nil && *req.MaxDepth >= 0 && len(namespace) > *req.MaxDepth {
+		namespace = append([]string(nil), namespace[:*req.MaxDepth]...)
+	}
+	return namespace, true
 }
 
 func (e storeEntry) toItem(namespace []string, key string) *StoreItem {

@@ -193,6 +193,20 @@ func interruptsByTask(writes []checkpoint.PendingWrite) map[string]pendingInterr
 }
 
 func pendingInterruptFromValue(value any) (pendingInterrupt, bool) {
+	if iv, ok := pendingInterruptFromDirectValue(value); ok {
+		return iv, true
+	}
+	if items, ok := value.([]any); ok {
+		for _, item := range items {
+			if iv, ok := pendingInterruptFromValue(item); ok {
+				return iv, true
+			}
+		}
+	}
+	return pendingInterrupt{}, false
+}
+
+func pendingInterruptFromDirectValue(value any) (pendingInterrupt, bool) {
 	switch v := value.(type) {
 	case interruptWrite:
 		if v.Interrupt.ID == "" {
@@ -219,12 +233,6 @@ func pendingInterruptFromValue(value any) (pendingInterrupt, bool) {
 			return pendingInterrupt{}, false
 		}
 		return pendingInterrupt{InterruptID: v[0].ID}, true
-	case []any:
-		for _, item := range v {
-			if iv, ok := pendingInterruptFromValue(item); ok {
-				return iv, true
-			}
-		}
 	}
 	return pendingInterrupt{}, false
 }

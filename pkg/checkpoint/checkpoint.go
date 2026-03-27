@@ -10,6 +10,9 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -208,38 +211,25 @@ func EnsureTimestamp(ts string) string {
 
 // VersionAsInt64 attempts to parse a version token into int64.
 func VersionAsInt64(v Version) (int64, error) {
-	switch x := any(v).(type) {
-	case int:
-		return int64(x), nil
-	case int8:
-		return int64(x), nil
-	case int16:
-		return int64(x), nil
-	case int32:
-		return int64(x), nil
-	case int64:
-		return x, nil
-	case uint:
-		return int64(x), nil
-	case uint8:
-		return int64(x), nil
-	case uint16:
-		return int64(x), nil
-	case uint32:
-		return int64(x), nil
-	case uint64:
-		return int64(x), nil
-	case float32:
-		return int64(x), nil
-	case float64:
-		return int64(x), nil
-	case string:
-		var out int64
-		_, err := fmt.Sscanf(x, "%d", &out)
+	if s, ok := any(v).(string); ok {
+		out, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
 		if err != nil {
 			return 0, err
 		}
 		return out, nil
+	}
+
+	rv := reflect.ValueOf(any(v))
+	if !rv.IsValid() {
+		return 0, fmt.Errorf("unsupported version type %T", v)
+	}
+	switch rv.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return rv.Int(), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return int64(rv.Uint()), nil
+	case reflect.Float32, reflect.Float64:
+		return int64(rv.Float()), nil
 	default:
 		return 0, fmt.Errorf("unsupported version type %T", v)
 	}

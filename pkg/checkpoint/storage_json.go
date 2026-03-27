@@ -152,13 +152,28 @@ func UnmarshalMetadataFromStorage(payload []byte) (*CheckpointMetadata, error) {
 		return nil, err
 	}
 
-	extra := make(map[string]any)
+	extra, err := unmarshalExtraMetadataFields(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(extra) > 0 {
+		meta.Extra = extra
+	}
+
+	if meta.Source == "" && meta.Step == 0 && len(meta.Parents) == 0 && meta.RunID == "" && len(meta.Extra) == 0 {
+		return nil, nil
+	}
+	return meta, nil
+}
+
+func unmarshalExtraMetadataFields(raw map[string]json.RawMessage) (map[string]any, error) {
 	known := map[string]struct{}{
 		"source": {}, "Source": {},
 		"step": {}, "Step": {},
 		"parents": {}, "Parents": {},
 		"run_id": {}, "RunID": {},
 	}
+	extra := make(map[string]any)
 	for k, v := range raw {
 		if _, ok := known[k]; ok {
 			continue
@@ -169,14 +184,7 @@ func UnmarshalMetadataFromStorage(payload []byte) (*CheckpointMetadata, error) {
 		}
 		extra[k] = decoded
 	}
-	if len(extra) > 0 {
-		meta.Extra = extra
-	}
-
-	if meta.Source == "" && meta.Step == 0 && len(meta.Parents) == 0 && meta.RunID == "" && len(meta.Extra) == 0 {
-		return nil, nil
-	}
-	return meta, nil
+	return extra, nil
 }
 
 // MetadataMatchesFilter returns true when all filter key/value pairs match

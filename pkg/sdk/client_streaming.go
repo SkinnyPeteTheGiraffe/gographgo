@@ -67,6 +67,7 @@ func (c *Client) streamSSELoop(
 			return
 		}
 		sawEnd, scanErr, ok := consumeSSEBody(ctx, resp.Body, &state.lastEventID, parts)
+		_ = resp.Body.Close()
 		if shouldStopSSELoop(ctx, ok, sawEnd, scanErr, reconnectPath, state.reconnectAttempts, errs) {
 			return
 		}
@@ -265,71 +266,97 @@ func (c *Client) streamSSEV2(
 }
 
 func decodeStreamPartV2(part StreamPart) (StreamPartV2, bool, error) {
-	event := part.Event
-	if event == "" {
-		event = "events"
-	}
-	segments := strings.Split(event, "|")
-	partType := segments[0]
-	ns := []string{}
-	if len(segments) > 1 {
-		ns = segments[1:]
-	}
+	partType, ns := streamPartTypeAndNamespace(part.Event)
 	if partType == "end" {
 		return nil, true, nil
 	}
 
-	interrupts := []map[string]any{}
 	if partType == string(StreamModeValues) {
-		var values map[string]any
-		if err := json.Unmarshal(part.Data, &values); err != nil {
-			return nil, false, fmt.Errorf("sdk: decode values stream part: %w", err)
+		decoded, err := decodeValuesStreamPart(part, partType, ns)
+		if err != nil {
+			return nil, false, err
 		}
-		if rawInterrupts, ok := values["__interrupt__"]; ok {
-			var err error
-			interrupts, err = toInterruptMaps(rawInterrupts)
-			if err != nil {
-				return nil, false, fmt.Errorf("sdk: decode values interrupts: %w", err)
-			}
-			delete(values, "__interrupt__")
-		}
-		return ValuesStreamPart{
-			Type:       partType,
-			NS:         ns,
-			Data:       values,
-			Interrupts: interrupts,
-			Event:      part.Event,
-			ID:         part.ID,
-		}, false, nil
+		return decoded, false, nil
 	}
 
 	decoded, err := decodeStreamPartData(part.Data)
 	if err != nil {
 		return nil, false, fmt.Errorf("sdk: decode stream part data: %w", err)
 	}
+	return decodeNonValuesStreamPart(part, partType, ns, decoded), false, nil
+}
 
+func streamPartTypeAndNamespace(event string) (partType string, namespace []string) {
+	eventName := event
+	if eventName == "" {
+		eventName = "events"
+	}
+	segments := strings.Split(eventName, "|")
+	partType = segments[0]
+	if len(segments) <= 1 {
+		return partType, []string{}
+	}
+	return partType, segments[1:]
+}
+
+func decodeValuesStreamPart(part StreamPart, partType string, ns []string) (StreamPartV2, error) {
+	var values map[string]any
+	if err := json.Unmarshal(part.Data, &values); err != nil {
+		return nil, fmt.Errorf("sdk: decode values stream part: %w", err)
+	}
+	interrupts := []map[string]any{}
+	if rawInterrupts, ok := values["__interrupt__"]; ok {
+		var err error
+		interrupts, err = toInterruptMaps(rawInterrupts)
+		if err != nil {
+			return nil, fmt.Errorf("sdk: decode values interrupts: %w", err)
+		}
+		delete(values, "__interrupt__")
+	}
+	return ValuesStreamPart{
+		Type:       partType,
+		NS:         ns,
+		Data:       values,
+		Interrupts: interrupts,
+		Event:      part.Event,
+		ID:         part.ID,
+	}, nil
+}
+
+func decodeNonValuesStreamPart(part StreamPart, partType string, ns []string, decoded any) StreamPartV2 {
 	asMap, _ := decoded.(map[string]any)
 	if asMap == nil {
 		asMap = map[string]any{"value": decoded}
 	}
+	base := streamPartEnvelope{part: part, partType: partType, ns: ns}
+	return base.toTyped(decoded, asMap)
+}
 
-	switch partType {
+type streamPartEnvelope struct {
+	part     StreamPart
+	partType string
+	ns       []string
+}
+
+func (e streamPartEnvelope) toTyped(decoded any, asMap map[string]any) StreamPartV2 {
+	interrupts := []map[string]any{}
+	switch e.partType {
 	case string(StreamModeUpdates):
-		return UpdatesStreamPart{Type: partType, NS: ns, Data: asMap, Interrupts: interrupts, Event: part.Event, ID: part.ID}, false, nil
+		return UpdatesStreamPart{Type: e.partType, NS: e.ns, Data: asMap, Interrupts: interrupts, Event: e.part.Event, ID: e.part.ID}
 	case string(StreamModeMessages):
-		return MessagesStreamPart{Type: partType, NS: ns, Data: decoded, Interrupts: interrupts, Event: part.Event, ID: part.ID}, false, nil
+		return MessagesStreamPart{Type: e.partType, NS: e.ns, Data: decoded, Interrupts: interrupts, Event: e.part.Event, ID: e.part.ID}
 	case string(StreamModeCustom):
-		return CustomStreamPart{Type: partType, NS: ns, Data: decoded, Interrupts: interrupts, Event: part.Event, ID: part.ID}, false, nil
+		return CustomStreamPart{Type: e.partType, NS: e.ns, Data: decoded, Interrupts: interrupts, Event: e.part.Event, ID: e.part.ID}
 	case string(StreamModeCheckpoints):
-		return CheckpointStreamPart{Type: partType, NS: ns, Data: asMap, Interrupts: interrupts, Event: part.Event, ID: part.ID}, false, nil
+		return CheckpointStreamPart{Type: e.partType, NS: e.ns, Data: asMap, Interrupts: interrupts, Event: e.part.Event, ID: e.part.ID}
 	case string(StreamModeTasks):
-		return TasksStreamPart{Type: partType, NS: ns, Data: asMap, Interrupts: interrupts, Event: part.Event, ID: part.ID}, false, nil
+		return TasksStreamPart{Type: e.partType, NS: e.ns, Data: asMap, Interrupts: interrupts, Event: e.part.Event, ID: e.part.ID}
 	case string(StreamModeDebug):
-		return DebugStreamPart{Type: partType, NS: ns, Data: asMap, Interrupts: interrupts, Event: part.Event, ID: part.ID}, false, nil
+		return DebugStreamPart{Type: e.partType, NS: e.ns, Data: asMap, Interrupts: interrupts, Event: e.part.Event, ID: e.part.ID}
 	case "metadata":
-		return MetadataStreamPart{Type: partType, NS: ns, Data: asMap, Interrupts: interrupts, Event: part.Event, ID: part.ID}, false, nil
+		return MetadataStreamPart{Type: e.partType, NS: e.ns, Data: asMap, Interrupts: interrupts, Event: e.part.Event, ID: e.part.ID}
 	default:
-		return UnknownStreamPart{Type: partType, NS: ns, Data: decoded, Interrupts: interrupts, Event: part.Event, ID: part.ID}, false, nil
+		return UnknownStreamPart{Type: e.partType, NS: e.ns, Data: decoded, Interrupts: interrupts, Event: e.part.Event, ID: e.part.ID}
 	}
 }
 

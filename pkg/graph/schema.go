@@ -115,18 +115,12 @@ func schemaFieldName(field reflect.StructField) (name string, include bool) {
 
 func GetInputJSONSchema(t any, name string) map[string]any {
 	schema := generateJSONSchema(reflect.TypeOf(t), name)
-	data, _ := json.Marshal(schema)
-	result := make(map[string]any)
-	json.Unmarshal(data, &result)
-	return result
+	return schemaToMap(schema)
 }
 
 func GetOutputJSONSchema(t any, name string) map[string]any {
 	schema := generateJSONSchema(reflect.TypeOf(t), name)
-	data, _ := json.Marshal(schema)
-	result := make(map[string]any)
-	json.Unmarshal(data, &result)
-	return result
+	return schemaToMap(schema)
 }
 
 type SchemaGenerator struct {
@@ -160,17 +154,26 @@ func NewJSONSchemaGenerator() *JSONSchemaGenerator {
 
 func (g *JSONSchemaGenerator) Generate(t any, name string) map[string]any {
 	schema := generateJSONSchema(reflect.TypeOf(t), name)
-	data, _ := json.Marshal(schema)
-	result := make(map[string]any)
-	json.Unmarshal(data, &result)
-	return result
+	return schemaToMap(schema)
 }
 
 func (g *JSONSchemaGenerator) GenerateWithChannels(t any, channels map[string]Channel, name string) map[string]any {
 	schema := generateJSONSchemaWithChannels(reflect.TypeOf(t), channels, name)
-	data, _ := json.Marshal(schema)
+	return schemaToMap(schema)
+}
+
+func schemaToMap(schema *JSONSchema) map[string]any {
+	if schema == nil {
+		return map[string]any{}
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return map[string]any{}
+	}
 	result := make(map[string]any)
-	json.Unmarshal(data, &result)
+	if err := json.Unmarshal(data, &result); err != nil {
+		return map[string]any{}
+	}
 	return result
 }
 

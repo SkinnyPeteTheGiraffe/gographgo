@@ -101,40 +101,22 @@ func ResolveEnv(cfg *Config, configFilePath string) (map[string]string, error) {
 	if cfg == nil {
 		return out, nil
 	}
-	if cfg.EnvFile != "" {
-		base := filepath.Dir(configFilePath)
-		path := cfg.EnvFile
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(base, path)
-		}
-		vars, err := parseDotEnv(path)
-		if err != nil {
-			return nil, err
-		}
-		for k, v := range vars {
-			out[k] = v
-		}
+	if err := mergeEnvFile(out, cfg.EnvFile, configFilePath); err != nil {
+		return nil, err
 	}
 	for k, v := range cfg.Env {
 		out[k] = v
 	}
 
-	if err := appendJSONEnv(out, "GOGRAPHGO_STORE", cfg.Store); err != nil {
-		return nil, err
+	jsonEnv := []jsonEnvEntry{
+		{value: cfg.Store, key: "GOGRAPHGO_STORE"},
+		{value: cfg.Auth, key: "GOGRAPHGO_AUTH"},
+		{value: cfg.HTTP, key: "GOGRAPHGO_HTTP"},
+		{value: cfg.UI, key: "GOGRAPHGO_UI"},
+		{value: cfg.Webhooks, key: "GOGRAPHGO_WEBHOOKS"},
+		{value: cfg.Checkpointer, key: "GOGRAPHGO_CHECKPOINTER"},
 	}
-	if err := appendJSONEnv(out, "GOGRAPHGO_AUTH", cfg.Auth); err != nil {
-		return nil, err
-	}
-	if err := appendJSONEnv(out, "GOGRAPHGO_HTTP", cfg.HTTP); err != nil {
-		return nil, err
-	}
-	if err := appendJSONEnv(out, "GOGRAPHGO_UI", cfg.UI); err != nil {
-		return nil, err
-	}
-	if err := appendJSONEnv(out, "GOGRAPHGO_WEBHOOKS", cfg.Webhooks); err != nil {
-		return nil, err
-	}
-	if err := appendJSONEnv(out, "GOGRAPHGO_CHECKPOINTER", cfg.Checkpointer); err != nil {
+	if err := appendJSONEnvEntries(out, jsonEnv); err != nil {
 		return nil, err
 	}
 	if len(cfg.Dependencies) > 0 {
@@ -169,90 +151,8 @@ func defaultConfig() Config {
 }
 
 func decodeKnown(raw map[string]json.RawMessage, cfg *Config) error {
-	if v, ok := raw["name"]; ok {
-		if err := json.Unmarshal(v, &cfg.Name); err != nil {
-			return fmt.Errorf("invalid name: %w", err)
-		}
-	}
-	if v, ok := raw["graphs"]; ok {
-		if err := json.Unmarshal(v, &cfg.Graphs); err != nil {
-			return fmt.Errorf("invalid graphs: %w", err)
-		}
-	}
-	if v, ok := raw["dependencies"]; ok {
-		if err := json.Unmarshal(v, &cfg.Dependencies); err != nil {
-			return fmt.Errorf("invalid dependencies: %w", err)
-		}
-	}
-	if v, ok := raw["dockerfile_lines"]; ok {
-		if err := json.Unmarshal(v, &cfg.DockerfileLines); err != nil {
-			return fmt.Errorf("invalid dockerfile_lines: %w", err)
-		}
-	}
-	if v, ok := raw["store"]; ok {
-		if err := json.Unmarshal(v, &cfg.Store); err != nil {
-			return fmt.Errorf("invalid store: %w", err)
-		}
-	}
-	if v, ok := raw["auth"]; ok {
-		if err := json.Unmarshal(v, &cfg.Auth); err != nil {
-			return fmt.Errorf("invalid auth: %w", err)
-		}
-	}
-	if v, ok := raw["http"]; ok {
-		if err := json.Unmarshal(v, &cfg.HTTP); err != nil {
-			return fmt.Errorf("invalid http: %w", err)
-		}
-	}
-	if v, ok := raw["ui"]; ok {
-		if err := json.Unmarshal(v, &cfg.UI); err != nil {
-			return fmt.Errorf("invalid ui: %w", err)
-		}
-	}
-	if v, ok := raw["webhooks"]; ok {
-		if err := json.Unmarshal(v, &cfg.Webhooks); err != nil {
-			return fmt.Errorf("invalid webhooks: %w", err)
-		}
-	}
-	if v, ok := raw["checkpointer"]; ok {
-		if err := json.Unmarshal(v, &cfg.Checkpointer); err != nil {
-			return fmt.Errorf("invalid checkpointer: %w", err)
-		}
-	}
-	if v, ok := raw["disable_persistence"]; ok {
-		if err := json.Unmarshal(v, &cfg.DisablePersistence); err != nil {
-			return fmt.Errorf("invalid disable_persistence: %w", err)
-		}
-	}
-	if v, ok := raw["python_version"]; ok {
-		if err := json.Unmarshal(v, &cfg.PythonVersion); err != nil {
-			return fmt.Errorf("invalid python_version: %w", err)
-		}
-	}
-	if v, ok := raw["node_version"]; ok {
-		if err := json.Unmarshal(v, &cfg.NodeVersion); err != nil {
-			return fmt.Errorf("invalid node_version: %w", err)
-		}
-	}
-	if v, ok := raw["pip_config_file"]; ok {
-		if err := json.Unmarshal(v, &cfg.PIPConfigFile); err != nil {
-			return fmt.Errorf("invalid pip_config_file: %w", err)
-		}
-	}
-	if v, ok := raw["server"]; ok {
-		if err := json.Unmarshal(v, &cfg.Server); err != nil {
-			return fmt.Errorf("invalid server: %w", err)
-		}
-	}
-	if v, ok := raw["run"]; ok {
-		if err := json.Unmarshal(v, &cfg.Run); err != nil {
-			return fmt.Errorf("invalid run: %w", err)
-		}
-	}
-	if v, ok := raw["env_file"]; ok {
-		if err := json.Unmarshal(v, &cfg.EnvFile); err != nil {
-			return fmt.Errorf("invalid env_file: %w", err)
-		}
+	if err := decodeStandardConfigFields(raw, cfg); err != nil {
+		return err
 	}
 
 	if v, ok := raw["env"]; ok {
@@ -266,6 +166,84 @@ func decodeKnown(raw map[string]json.RawMessage, cfg *Config) error {
 			}
 			cfg.EnvFile = envFile
 		}
+	}
+	return nil
+}
+
+func mergeEnvFile(out map[string]string, envFile, configFilePath string) error {
+	if envFile == "" {
+		return nil
+	}
+	base := filepath.Dir(configFilePath)
+	path := envFile
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	vars, err := parseDotEnv(path)
+	if err != nil {
+		return err
+	}
+	for k, v := range vars {
+		out[k] = v
+	}
+	return nil
+}
+
+type jsonEnvEntry struct {
+	value any
+	key   string
+}
+
+func appendJSONEnvEntries(out map[string]string, entries []jsonEnvEntry) error {
+	for _, entry := range entries {
+		if err := appendJSONEnv(out, entry.key, entry.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type knownFieldDecoder struct {
+	decode func(json.RawMessage) error
+	key    string
+	label  string
+}
+
+func decodeStandardConfigFields(raw map[string]json.RawMessage, cfg *Config) error {
+	decoders := []knownFieldDecoder{
+		{key: "name", label: "name", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.Name) }},
+		{key: "graphs", label: "graphs", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.Graphs) }},
+		{key: "dependencies", label: "dependencies", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.Dependencies) }},
+		{key: "dockerfile_lines", label: "dockerfile_lines", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.DockerfileLines) }},
+		{key: "store", label: "store", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.Store) }},
+		{key: "auth", label: "auth", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.Auth) }},
+		{key: "http", label: "http", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.HTTP) }},
+		{key: "ui", label: "ui", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.UI) }},
+		{key: "webhooks", label: "webhooks", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.Webhooks) }},
+		{key: "checkpointer", label: "checkpointer", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.Checkpointer) }},
+		{key: "disable_persistence", label: "disable_persistence", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.DisablePersistence) }},
+		{key: "python_version", label: "python_version", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.PythonVersion) }},
+		{key: "node_version", label: "node_version", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.NodeVersion) }},
+		{key: "pip_config_file", label: "pip_config_file", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.PIPConfigFile) }},
+		{key: "server", label: "server", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.Server) }},
+		{key: "run", label: "run", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.Run) }},
+		{key: "env_file", label: "env_file", decode: func(v json.RawMessage) error { return json.Unmarshal(v, &cfg.EnvFile) }},
+	}
+	for _, decoder := range decoders {
+		if err := decodeKnownField(raw, decoder); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decodeKnownField(raw map[string]json.RawMessage, decoder knownFieldDecoder) error {
+	v, ok := raw[decoder.key]
+	if !ok {
+		return nil
+	}
+	if err := decoder.decode(v); err != nil {
+		return fmt.Errorf("invalid %s: %w", decoder.label, err)
 	}
 	return nil
 }

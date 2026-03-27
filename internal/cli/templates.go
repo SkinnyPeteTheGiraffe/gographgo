@@ -151,51 +151,72 @@ func unzipInto(r io.ReaderAt, size int64, dest string) error {
 	var extractedBytes int64
 	rootPrefix := detectArchiveRoot(zr)
 	for _, f := range zr.File {
-		rel := strings.TrimPrefix(f.Name, rootPrefix)
-		rel = strings.TrimPrefix(rel, "/")
-		if rel == "" {
-			continue
-		}
-		target := filepath.Join(dest, filepath.FromSlash(rel))
-		if !strings.HasPrefix(target, dest+string(os.PathSeparator)) && target != dest {
-			return fmt.Errorf("invalid archive entry: %s", f.Name)
-		}
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, templateDirPerm); err != nil {
-				return err
+		entrySize, processErr := extractTemplateEntry(f, dest, rootPrefix, extractedBytes)
+		if processErr != nil {
+			if processErr == errSkipTemplateEntry {
+				continue
 			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(target), templateDirPerm); err != nil {
-			return err
-		}
-		if f.UncompressedSize64 > uint64(maxTemplateExtractBytes) {
-			return fmt.Errorf("archive entry too large: %s", f.Name)
-		}
-		entrySize := int64(f.UncompressedSize64)
-		if extractedBytes+entrySize > maxTemplateExtractBytes {
-			return fmt.Errorf("template archive extracted size exceeds %d bytes", maxTemplateExtractBytes)
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return err
-		}
-		func() {
-			defer func() { _ = rc.Close() }()
-			out, createErr := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, templateFilePerm)
-			if createErr != nil {
-				err = createErr
-				return
-			}
-			defer func() { _ = out.Close() }()
-			_, err = io.CopyN(out, rc, entrySize)
-		}()
-		if err != nil {
-			return err
+			return processErr
 		}
 		extractedBytes += entrySize
 	}
 	return nil
+}
+
+var errSkipTemplateEntry = fmt.Errorf("skip template entry")
+
+func extractTemplateEntry(f *zip.File, dest, rootPrefix string, extractedBytes int64) (int64, error) {
+	rel := strings.TrimPrefix(f.Name, rootPrefix)
+	rel = strings.TrimPrefix(rel, "/")
+	if rel == "" {
+		return 0, errSkipTemplateEntry
+	}
+	target := filepath.Join(dest, filepath.FromSlash(rel))
+	if !strings.HasPrefix(target, dest+string(os.PathSeparator)) && target != dest {
+		return 0, fmt.Errorf("invalid archive entry: %s", f.Name)
+	}
+	if f.FileInfo().IsDir() {
+		if err := os.MkdirAll(target, templateDirPerm); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), templateDirPerm); err != nil {
+		return 0, err
+	}
+	entrySize := int64(f.UncompressedSize64)
+	if err := validateTemplateEntrySize(f.Name, entrySize, extractedBytes); err != nil {
+		return 0, err
+	}
+	if err := copyTemplateEntryFile(f, target, entrySize); err != nil {
+		return 0, err
+	}
+	return entrySize, nil
+}
+
+func validateTemplateEntrySize(name string, entrySize, extractedBytes int64) error {
+	if entrySize > maxTemplateExtractBytes {
+		return fmt.Errorf("archive entry too large: %s", name)
+	}
+	if extractedBytes+entrySize > maxTemplateExtractBytes {
+		return fmt.Errorf("template archive extracted size exceeds %d bytes", maxTemplateExtractBytes)
+	}
+	return nil
+}
+
+func copyTemplateEntryFile(f *zip.File, target string, entrySize int64) error {
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rc.Close() }()
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, templateFilePerm)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	_, err = io.CopyN(out, rc, entrySize)
+	return err
 }
 
 func detectArchiveRoot(zr *zip.Reader) string {

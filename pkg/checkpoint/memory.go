@@ -202,72 +202,101 @@ func (s *InMemorySaver) PutWrites(
 	defer s.mu.Unlock()
 
 	existing := s.writes[key]
+	state := indexPendingWrites(existing, taskID)
+	existing = mergePendingWritesBySlot(existing, serializedWrites, taskID, state)
 
-	regularSeen := make(map[string]map[int]struct{})
-	specialPos := make(map[string]map[int]int)
-	regularCounter := make(map[string]int)
+	s.writes[key] = existing
+	return nil
+}
 
+type pendingWriteIndex struct {
+	regularSeen    map[string]map[int]struct{}
+	specialPos     map[string]map[int]int
+	regularCounter map[string]int
+}
+
+func indexPendingWrites(existing []PendingWrite, fallbackTaskID string) pendingWriteIndex {
+	idx := pendingWriteIndex{
+		regularSeen:    make(map[string]map[int]struct{}),
+		specialPos:     make(map[string]map[int]int),
+		regularCounter: make(map[string]int),
+	}
 	for i, w := range existing {
 		id := w.TaskID
 		if id == "" {
-			id = taskID
+			id = fallbackTaskID
 			existing[i].TaskID = id
 		}
 
 		slot, special := writeSlot(w.Channel, 0)
 		if special {
-			if specialPos[id] == nil {
-				specialPos[id] = make(map[int]int)
-			}
-			specialPos[id][slot] = i
+			putSpecialWritePosition(idx.specialPos, id, slot, i)
 			continue
 		}
 
-		slot = regularCounter[id]
-		regularCounter[id]++
-		if regularSeen[id] == nil {
-			regularSeen[id] = make(map[int]struct{})
-		}
-		regularSeen[id][slot] = struct{}{}
+		slot = idx.regularCounter[id]
+		idx.regularCounter[id]++
+		markRegularWriteSeen(idx.regularSeen, id, slot)
 	}
+	return idx
+}
 
-	for i, w := range serializedWrites {
-		id := taskID
+func mergePendingWritesBySlot(existing, incoming []PendingWrite, fallbackTaskID string, idx pendingWriteIndex) []PendingWrite {
+	for i, write := range incoming {
+		id := fallbackTaskID
 		if id == "" {
-			id = w.TaskID
+			id = write.TaskID
 		}
-		w.TaskID = id
+		write.TaskID = id
 
-		slot, special := writeSlot(w.Channel, i)
+		slot, special := writeSlot(write.Channel, i)
 		if special {
-			if specialPos[id] != nil {
-				if pos, ok := specialPos[id][slot]; ok {
-					existing[pos] = w
-					continue
-				}
-			}
-			existing = append(existing, w)
-			if specialPos[id] == nil {
-				specialPos[id] = make(map[int]int)
-			}
-			specialPos[id][slot] = len(existing) - 1
-			continue
-		}
-
-		if regularSeen[id] != nil {
-			if _, ok := regularSeen[id][slot]; ok {
+			if pos, ok := lookupSpecialWritePosition(idx.specialPos, id, slot); ok {
+				existing[pos] = write
 				continue
 			}
+			existing = append(existing, write)
+			putSpecialWritePosition(idx.specialPos, id, slot, len(existing)-1)
+			continue
 		}
-		existing = append(existing, w)
-		if regularSeen[id] == nil {
-			regularSeen[id] = make(map[int]struct{})
-		}
-		regularSeen[id][slot] = struct{}{}
-	}
 
-	s.writes[key] = existing
-	return nil
+		if regularWriteSeen(idx.regularSeen, id, slot) {
+			continue
+		}
+		existing = append(existing, write)
+		markRegularWriteSeen(idx.regularSeen, id, slot)
+	}
+	return existing
+}
+
+func putSpecialWritePosition(index map[string]map[int]int, taskID string, slot, pos int) {
+	if index[taskID] == nil {
+		index[taskID] = make(map[int]int)
+	}
+	index[taskID][slot] = pos
+}
+
+func lookupSpecialWritePosition(index map[string]map[int]int, taskID string, slot int) (int, bool) {
+	if index[taskID] == nil {
+		return 0, false
+	}
+	pos, ok := index[taskID][slot]
+	return pos, ok
+}
+
+func markRegularWriteSeen(seen map[string]map[int]struct{}, taskID string, slot int) {
+	if seen[taskID] == nil {
+		seen[taskID] = make(map[int]struct{})
+	}
+	seen[taskID][slot] = struct{}{}
+}
+
+func regularWriteSeen(seen map[string]map[int]struct{}, taskID string, slot int) bool {
+	if seen[taskID] == nil {
+		return false
+	}
+	_, ok := seen[taskID][slot]
+	return ok
 }
 
 func writeSlot(channel string, idx int) (slot int, special bool) {
@@ -302,46 +331,61 @@ func (s *InMemorySaver) List(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Collect all tuples and sort newest-first.
-	tuples := make([]*CheckpointTuple, 0)
-	if config == nil {
-		for _, byNS := range s.storage {
-			for _, byID := range byNS {
-				for _, t := range byID {
-					if opts.Before != nil && opts.Before.CheckpointID != "" {
-						if t.Checkpoint.ID >= opts.Before.CheckpointID {
-							continue
-						}
-					}
-					tuples = append(tuples, t)
-				}
-			}
-		}
-	} else {
-		byNS := s.storage[config.ThreadID]
-		if byNS == nil {
-			return nil, nil
-		}
-		ns := config.CheckpointNS
-		byID := byNS[ns]
-		for _, t := range byID {
-			if opts.Before != nil && opts.Before.CheckpointID != "" {
-				if t.Checkpoint.ID >= opts.Before.CheckpointID {
-					continue
-				}
-			}
-			tuples = append(tuples, t)
-		}
+	tuples := s.collectTuplesLocked(config, opts.Before)
+	if len(tuples) == 0 {
+		return nil, nil
 	}
 
-	// Sort newest-first (descending by checkpoint ID string).
 	sortByIDDesc(tuples)
-
 	if opts.Limit > 0 && len(tuples) > opts.Limit {
 		tuples = tuples[:opts.Limit]
 	}
 
-	// Attach pending writes and deserialize.
+	return s.hydrateFilteredTuplesLocked(ctx, tuples, opts.Filter)
+}
+
+func (s *InMemorySaver) collectTuplesLocked(config, before *Config) []*CheckpointTuple {
+	tuples := make([]*CheckpointTuple, 0)
+	if config == nil {
+		for _, byNS := range s.storage {
+			tuples = append(tuples, collectTuplesFromNamespaces(byNS, before)...)
+		}
+		return tuples
+	}
+	byNS := s.storage[config.ThreadID]
+	if byNS == nil {
+		return tuples
+	}
+	return collectTuplesFromCheckpoints(byNS[config.CheckpointNS], before)
+}
+
+func collectTuplesFromNamespaces(byNS map[string]map[string]*CheckpointTuple, before *Config) []*CheckpointTuple {
+	tuples := make([]*CheckpointTuple, 0)
+	for _, byID := range byNS {
+		tuples = append(tuples, collectTuplesFromCheckpoints(byID, before)...)
+	}
+	return tuples
+}
+
+func collectTuplesFromCheckpoints(byID map[string]*CheckpointTuple, before *Config) []*CheckpointTuple {
+	tuples := make([]*CheckpointTuple, 0, len(byID))
+	for _, t := range byID {
+		if shouldSkipBeforeCheckpoint(t, before) {
+			continue
+		}
+		tuples = append(tuples, t)
+	}
+	return tuples
+}
+
+func shouldSkipBeforeCheckpoint(t *CheckpointTuple, before *Config) bool {
+	if before == nil || before.CheckpointID == "" || t == nil || t.Checkpoint == nil {
+		return false
+	}
+	return t.Checkpoint.ID >= before.CheckpointID
+}
+
+func (s *InMemorySaver) hydrateFilteredTuplesLocked(ctx context.Context, tuples []*CheckpointTuple, filter map[string]any) ([]*CheckpointTuple, error) {
 	result := make([]*CheckpointTuple, 0, len(tuples))
 	for _, t := range tuples {
 		if err := ctx.Err(); err != nil {
@@ -351,7 +395,7 @@ func (s *InMemorySaver) List(
 		if err != nil {
 			return nil, err
 		}
-		if !MetadataMatchesFilter(hydrated.Metadata, opts.Filter) {
+		if !MetadataMatchesFilter(hydrated.Metadata, filter) {
 			continue
 		}
 		result = append(result, hydrated)
@@ -390,15 +434,7 @@ func (s *InMemorySaver) DeleteForRuns(ctx context.Context, runIDs []string) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(runIDs) == 0 {
-		return nil
-	}
-	runSet := make(map[string]struct{}, len(runIDs))
-	for _, id := range runIDs {
-		if id != "" {
-			runSet[id] = struct{}{}
-		}
-	}
+	runSet := nonEmptyRunSet(runIDs)
 	if len(runSet) == 0 {
 		return nil
 	}
@@ -407,28 +443,51 @@ func (s *InMemorySaver) DeleteForRuns(ctx context.Context, runIDs []string) erro
 	defer s.mu.Unlock()
 
 	for threadID, byNS := range s.storage {
-		for ns, byID := range byNS {
-			for checkpointID, tuple := range byID {
-				if tuple == nil || tuple.Metadata == nil {
-					continue
-				}
-				if _, ok := runSet[tuple.Metadata.RunID]; !ok {
-					continue
-				}
-				delete(byID, checkpointID)
-				delete(s.writes, checkpointKey{threadID: threadID, ns: ns, checkpointID: checkpointID})
-				s.deleteBlobRefsForCheckpointLocked(threadID, ns, tuple.Checkpoint)
-			}
-			if len(byID) == 0 {
-				delete(byNS, ns)
-			}
-		}
+		s.deleteRunsFromNamespacesLocked(threadID, byNS, runSet)
 		if len(byNS) == 0 {
 			delete(s.storage, threadID)
 		}
 	}
 
 	return nil
+}
+
+func nonEmptyRunSet(runIDs []string) map[string]struct{} {
+	runSet := make(map[string]struct{}, len(runIDs))
+	for _, id := range runIDs {
+		if id != "" {
+			runSet[id] = struct{}{}
+		}
+	}
+	return runSet
+}
+
+func (s *InMemorySaver) deleteRunsFromNamespacesLocked(threadID string, byNS map[string]map[string]*CheckpointTuple, runSet map[string]struct{}) {
+	for ns, byID := range byNS {
+		s.deleteRunCheckpointsLocked(threadID, ns, byID, runSet)
+		if len(byID) == 0 {
+			delete(byNS, ns)
+		}
+	}
+}
+
+func (s *InMemorySaver) deleteRunCheckpointsLocked(threadID, ns string, byID map[string]*CheckpointTuple, runSet map[string]struct{}) {
+	for checkpointID, tuple := range byID {
+		if !runMatchesTuple(tuple, runSet) {
+			continue
+		}
+		delete(byID, checkpointID)
+		delete(s.writes, checkpointKey{threadID: threadID, ns: ns, checkpointID: checkpointID})
+		s.deleteBlobRefsForCheckpointLocked(threadID, ns, tuple.Checkpoint)
+	}
+}
+
+func runMatchesTuple(tuple *CheckpointTuple, runSet map[string]struct{}) bool {
+	if tuple == nil || tuple.Metadata == nil {
+		return false
+	}
+	_, ok := runSet[tuple.Metadata.RunID]
+	return ok
 }
 
 // CopyThread copies all checkpoints and writes from source to target.
@@ -496,50 +555,73 @@ func (s *InMemorySaver) Prune(ctx context.Context, threadIDs []string, strategy 
 		if threadID == "" {
 			continue
 		}
-		switch strategy {
-		case PruneStrategyDelete:
-			delete(s.storage, threadID)
-			for k := range s.writes {
-				if k.threadID == threadID {
-					delete(s.writes, k)
-				}
-			}
-			for k := range s.blobs {
-				if k.threadID == threadID {
-					delete(s.blobs, k)
-				}
-			}
-		case PruneStrategyKeepLatest:
-			byNS := s.storage[threadID]
-			for ns, byID := range byNS {
-				var latestID string
-				for checkpointID := range byID {
-					if checkpointID > latestID {
-						latestID = checkpointID
-					}
-				}
-				for checkpointID := range byID {
-					if checkpointID == latestID {
-						continue
-					}
-					tuple := byID[checkpointID]
-					delete(byID, checkpointID)
-					delete(s.writes, checkpointKey{threadID: threadID, ns: ns, checkpointID: checkpointID})
-					s.deleteBlobRefsForCheckpointLocked(threadID, ns, tuple.Checkpoint)
-				}
-				if len(byID) == 0 {
-					delete(byNS, ns)
-				}
-			}
-			if len(byNS) == 0 {
-				delete(s.storage, threadID)
-			}
-		default:
-			return fmt.Errorf("checkpoint.Prune: unsupported strategy %q", strategy)
+		if err := s.pruneThreadLocked(threadID, strategy); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+func (s *InMemorySaver) pruneThreadLocked(threadID string, strategy PruneStrategy) error {
+	switch strategy {
+	case PruneStrategyDelete:
+		s.deleteThreadDataLocked(threadID)
+	case PruneStrategyKeepLatest:
+		s.pruneThreadKeepLatestLocked(threadID)
+	default:
+		return fmt.Errorf("checkpoint.Prune: unsupported strategy %q", strategy)
+	}
+	return nil
+}
+
+func (s *InMemorySaver) deleteThreadDataLocked(threadID string) {
+	delete(s.storage, threadID)
+	for k := range s.writes {
+		if k.threadID == threadID {
+			delete(s.writes, k)
+		}
+	}
+	for k := range s.blobs {
+		if k.threadID == threadID {
+			delete(s.blobs, k)
+		}
+	}
+}
+
+func (s *InMemorySaver) pruneThreadKeepLatestLocked(threadID string) {
+	byNS := s.storage[threadID]
+	for ns, byID := range byNS {
+		latestID := latestCheckpointID(byID)
+		s.removeNonLatestCheckpointsLocked(threadID, ns, byID, latestID)
+		if len(byID) == 0 {
+			delete(byNS, ns)
+		}
+	}
+	if len(byNS) == 0 {
+		delete(s.storage, threadID)
+	}
+}
+
+func latestCheckpointID(byID map[string]*CheckpointTuple) string {
+	var latestID string
+	for checkpointID := range byID {
+		if checkpointID > latestID {
+			latestID = checkpointID
+		}
+	}
+	return latestID
+}
+
+func (s *InMemorySaver) removeNonLatestCheckpointsLocked(threadID, ns string, byID map[string]*CheckpointTuple, latestID string) {
+	for checkpointID, tuple := range byID {
+		if checkpointID == latestID {
+			continue
+		}
+		delete(byID, checkpointID)
+		delete(s.writes, checkpointKey{threadID: threadID, ns: ns, checkpointID: checkpointID})
+		s.deleteBlobRefsForCheckpointLocked(threadID, ns, tuple.Checkpoint)
+	}
 }
 
 // hydrateTupleLocked returns a fully materialized tuple with deserialized
