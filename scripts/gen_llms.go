@@ -72,7 +72,7 @@ func main() {
 	}
 
 	dest := filepath.Join(root, "docs", "llms.md")
-	if err := os.WriteFile(dest, []byte(strings.TrimRight(out.String(), "\n")+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(dest, []byte(strings.TrimRight(out.String(), "\n")+"\n"), 0o644); err != nil {
 		fatalf("writing %s: %v\n", dest, err)
 	}
 	fmt.Printf("wrote %s\n", dest)
