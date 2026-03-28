@@ -125,7 +125,7 @@ func checkpointerFromConfig(cfg map[string]any, disablePersistence bool) (checkp
 		if conn == "" {
 			return nil, fmt.Errorf("postgres checkpointer requires connection string in one of: dsn, url, connection, conn, database_url")
 		}
-		return checkpointpostgres.Open(conn, checkpoint.JSONSerializer{})
+		return checkpointpostgres.OpenAutoMigrate(conn, checkpoint.JSONSerializer{})
 	default:
 		return nil, fmt.Errorf("unsupported checkpointer backend %q", backend)
 	}

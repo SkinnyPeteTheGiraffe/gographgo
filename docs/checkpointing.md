@@ -61,12 +61,46 @@ saver, err := sqlite.NewSaver("./checkpoints.db")
 PostgreSQL backend for multi-instance / production deployments.
 
 ```go
-import "github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint/postgres"
+import (
+    "github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint"
+    "github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint/postgres"
+)
 
-saver, err := postgres.NewSaver(ctx, "postgres://user:pass@host/db")
+saver, err := postgres.OpenWithOptions(
+    "postgres://user:pass@host/db",
+    checkpoint.JSONSerializer{},
+    postgres.Options{}, // AutoMigrate=false (no runtime DDL)
+)
 ```
 
-Both backends auto-migrate their schema on first use.
+Production recommendation: pre-provision the Postgres schema in CI/CD and keep
+`AutoMigrate` disabled in app/runtime code.
+
+If you want library-managed setup (local development or explicit opt-in), use
+either of these flows:
+
+```go
+// Explicit migration call.
+saver, err := postgres.OpenWithOptions(dsn, checkpoint.JSONSerializer{}, postgres.Options{})
+if err != nil {
+    return err
+}
+if err := saver.Migrate(ctx); err != nil {
+    return err
+}
+```
+
+```go
+// One-step opt-in migration at construction time.
+saver, err := postgres.OpenWithOptions(
+    dsn,
+    checkpoint.JSONSerializer{},
+    postgres.Options{AutoMigrate: true},
+)
+```
+
+For compatibility with older behavior, `postgres.OpenAutoMigrate(...)` and
+`postgres.NewAutoMigrate(...)` are also available.
 
 ---
 

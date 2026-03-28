@@ -115,13 +115,34 @@ type Saver struct {
 	serializer checkpoint.Serializer
 }
 
-// Open opens a Postgres database and initializes a Saver.
+// Options configures Postgres saver initialization behavior.
+type Options struct {
+	// AutoMigrate applies built-in schema migrations during saver construction.
+	// Leave false to require pre-provisioned schema and prevent runtime DDL.
+	AutoMigrate bool
+}
+
+// Open opens a Postgres database and initializes a Saver without applying DDL.
+//
+// To keep the legacy auto-migration behavior, use OpenWithOptions with
+// Options{AutoMigrate: true} or OpenAutoMigrate.
 func Open(connString string, serializer checkpoint.Serializer) (*Saver, error) {
+	return OpenWithOptions(connString, serializer, Options{})
+}
+
+// OpenAutoMigrate opens a Postgres database and initializes a Saver while
+// applying built-in migrations.
+func OpenAutoMigrate(connString string, serializer checkpoint.Serializer) (*Saver, error) {
+	return OpenWithOptions(connString, serializer, Options{AutoMigrate: true})
+}
+
+// OpenWithOptions opens a Postgres database and initializes a Saver.
+func OpenWithOptions(connString string, serializer checkpoint.Serializer, opts Options) (*Saver, error) {
 	db, err := sql.Open("pgx", connString)
 	if err != nil {
 		return nil, err
 	}
-	s, err := New(db, serializer)
+	s, err := NewWithOptions(db, serializer, opts)
 	if err != nil {
 		_ = db.Close()
 		return nil, err
@@ -129,8 +150,22 @@ func Open(connString string, serializer checkpoint.Serializer) (*Saver, error) {
 	return s, nil
 }
 
-// New creates a Saver from an existing sql.DB.
+// New creates a Saver from an existing sql.DB without applying DDL.
+//
+// To keep the legacy auto-migration behavior, use NewWithOptions with
+// Options{AutoMigrate: true} or NewAutoMigrate.
 func New(db *sql.DB, serializer checkpoint.Serializer) (*Saver, error) {
+	return NewWithOptions(db, serializer, Options{})
+}
+
+// NewAutoMigrate creates a Saver from an existing sql.DB while applying
+// built-in migrations.
+func NewAutoMigrate(db *sql.DB, serializer checkpoint.Serializer) (*Saver, error) {
+	return NewWithOptions(db, serializer, Options{AutoMigrate: true})
+}
+
+// NewWithOptions creates a Saver from an existing sql.DB.
+func NewWithOptions(db *sql.DB, serializer checkpoint.Serializer, opts Options) (*Saver, error) {
 	if db == nil {
 		return nil, fmt.Errorf("checkpoint/postgres: db must not be nil")
 	}
@@ -138,10 +173,24 @@ func New(db *sql.DB, serializer checkpoint.Serializer) (*Saver, error) {
 		serializer = checkpoint.IdentitySerializer{}
 	}
 	s := &Saver{db: db, serializer: serializer}
-	if err := s.setup(context.Background()); err != nil {
-		return nil, err
+	if opts.AutoMigrate {
+		if err := s.Migrate(context.Background()); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := s.requireSchema(context.Background()); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
+}
+
+// Migrate applies built-in schema migrations.
+func (s *Saver) Migrate(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return s.setup(ctx)
 }
 
 func (s *Saver) setup(ctx context.Context) error {
@@ -165,6 +214,49 @@ func (s *Saver) setup(ctx context.Context) error {
 		if _, err := s.db.ExecContext(ctx, `INSERT INTO checkpoint_migrations (v) VALUES ($1) ON CONFLICT (v) DO NOTHING`, i); err != nil {
 			return fmt.Errorf("checkpoint/postgres: record migration %d: %w", i, err)
 		}
+	}
+	return nil
+}
+
+func (s *Saver) requireSchema(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var (
+		migrations  sql.NullString
+		checkpoints sql.NullString
+		blobs       sql.NullString
+		writes      sql.NullString
+	)
+	err := s.db.QueryRowContext(ctx, `SELECT
+  to_regclass('checkpoint_migrations')::text,
+  to_regclass('checkpoints')::text,
+  to_regclass('checkpoint_blobs')::text,
+  to_regclass('checkpoint_writes')::text`).
+		Scan(&migrations, &checkpoints, &blobs, &writes)
+	if err != nil {
+		return fmt.Errorf("checkpoint/postgres: check schema status: %w", err)
+	}
+	if !migrations.Valid || !checkpoints.Valid || !blobs.Valid || !writes.Valid {
+		return fmt.Errorf("checkpoint/postgres: schema not initialized; call Saver.Migrate(ctx) or set Options{AutoMigrate: true}")
+	}
+
+	var version sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(v) FROM checkpoint_migrations`).Scan(&version); err != nil {
+		return fmt.Errorf("checkpoint/postgres: read migration version: %w", err)
+	}
+	latest := int64(len(postgresMigrations) - 1)
+	if !version.Valid || version.Int64 < latest {
+		got := int64(-1)
+		if version.Valid {
+			got = version.Int64
+		}
+		return fmt.Errorf(
+			"checkpoint/postgres: schema version %d is behind required %d; call Saver.Migrate(ctx) or set Options{AutoMigrate: true}",
+			got,
+			latest,
+		)
 	}
 	return nil
 }
