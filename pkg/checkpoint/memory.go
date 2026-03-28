@@ -3,7 +3,9 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -711,8 +713,20 @@ func sortByIDDesc(tuples []*CheckpointTuple) {
 // In production, use UUID6 (monotonically increasing UUID); here we use a
 // simple timestamp + random suffix sufficient for in-memory use.
 func newCheckpointID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	for {
+		now := time.Now().UnixNano()
+		prev := lastCheckpointID.Load()
+		next := now
+		if next <= prev {
+			next = prev + 1
+		}
+		if lastCheckpointID.CompareAndSwap(prev, next) {
+			return strconv.FormatInt(next, 10)
+		}
+	}
 }
+
+var lastCheckpointID atomic.Int64
 
 func copyConfig(cfg *Config) *Config {
 	if cfg == nil {

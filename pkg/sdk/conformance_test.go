@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,9 +108,13 @@ func assertJSONGolden(t *testing.T, filename string, got any) {
 	if err != nil {
 		t.Fatalf("os.ReadFile(%q) error = %v", path, err)
 	}
-	if !reflect.DeepEqual(string(want), buf.String()) {
+	if normalizeGoldenNewlines(string(want)) != normalizeGoldenNewlines(buf.String()) {
 		t.Fatalf("golden mismatch for %s\nwant:\n%s\n\ngot:\n%s\n", path, string(want), buf.String())
 	}
+}
+
+func normalizeGoldenNewlines(s string) string {
+	return strings.ReplaceAll(s, "\r\n", "\n")
 }
 
 func normalizeDynamic(v any, parentKey string) any {
