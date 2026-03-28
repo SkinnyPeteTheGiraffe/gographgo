@@ -68,8 +68,8 @@ func GetEntrypointPrevious(ctx context.Context) any {
 //
 // Tasks run synchronously via Invoke or concurrently via Async.
 type Task[Input, Output any] struct {
-	name string
 	fn   func(ctx context.Context, input Input) (Output, error)
+	name string
 }
 
 // NewTask creates a named callable task.
@@ -151,22 +151,22 @@ type EntrypointOptions struct {
 	Checkpointer checkpoint.Saver
 	Store        Store
 	Context      any
-	Debug        bool
 	Durability   DurabilityMode
 	Name         string
+	Debug        bool
 }
 
 // EntrypointWorkflow is an executable functional workflow.
 //
 // It supports Invoke and Stream interfaces similar to compiled graphs.
 type EntrypointWorkflow[Input, Output any] struct {
-	name         string
-	fn           func(ctx context.Context, input Input) (EntrypointResult[Output], error)
 	checkpointer checkpoint.Saver
 	store        Store
 	contextValue any
-	debug        bool
+	fn           func(ctx context.Context, input Input) (EntrypointResult[Output], error)
+	name         string
 	durability   DurabilityMode
+	debug        bool
 }
 
 // NewEntrypoint creates a functional workflow entrypoint.
@@ -310,15 +310,15 @@ func (w *EntrypointWorkflow[Input, Output]) mergeConfig(config Config) Config {
 	return config
 }
 
-func loadEntrypointPrevious(ctx context.Context, config Config) (any, *checkpoint.CheckpointTuple, int, error) {
+func loadEntrypointPrevious(ctx context.Context, config Config) (previous any, tuple *checkpoint.CheckpointTuple, step int, err error) {
 	if config.Checkpointer == nil || config.ThreadID == "" {
 		return nil, nil, -1, nil
 	}
-	tuple, err := config.Checkpointer.GetTuple(ctx, config.CheckpointConfig())
+	tuple, err = config.Checkpointer.GetTuple(ctx, config.CheckpointConfig())
 	if err != nil {
 		return nil, nil, -1, fmt.Errorf("loading entrypoint checkpoint: %w", err)
 	}
-	step := -1
+	step = -1
 	if tuple != nil && tuple.Metadata != nil {
 		step = tuple.Metadata.Step
 	}

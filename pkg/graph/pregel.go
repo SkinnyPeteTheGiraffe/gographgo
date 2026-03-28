@@ -2,9 +2,10 @@ package graph
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"math"
-	"math/rand"
 	"time"
 )
 
@@ -22,24 +23,21 @@ const (
 
 // pregelWrite is a pending write to a named channel produced by a task.
 type pregelWrite struct {
-	channel string
 	value   any
+	channel string
 }
 
 // pregelTaskResult holds the output of a completed task.
 type pregelTaskResult struct {
+	err          error
+	parentCmd    *Command
 	taskID       string
 	node         string
-	path         []any
 	checkpointNS string
+	path         []any
 	tags         []string
 	writes       []pregelWrite
-	interrupts   []Interrupt // interrupts raised inside the node via Interrupt()
-	err          error
-	// parentCmd is non-nil when the task issued a Command targeting the parent
-	// graph (Command.Graph == CommandParent). The loop propagates this upward
-	// rather than handling it locally.
-	parentCmd *Command
+	interrupts   []Interrupt
 }
 
 // pregelTask is an in-flight task for a single superstep.
@@ -240,8 +238,17 @@ func retrySleepDuration(policy RetryPolicy, attempts int) time.Duration {
 		interval = time.Duration(math.Min(float64(interval), float64(policy.MaxInterval)))
 	}
 	if policy.Jitter {
-		jitterFraction := rand.Float64() * 0.25
+		jitterFraction := cryptoJitterFraction() * 0.25
 		interval = time.Duration(float64(interval) * (1 + jitterFraction))
 	}
 	return interval
+}
+
+func cryptoJitterFraction() float64 {
+	var b [8]byte
+	if _, err := cryptorand.Read(b[:]); err != nil {
+		return 0
+	}
+	v := binary.BigEndian.Uint64(b[:])
+	return float64(v) / float64(^uint64(0))
 }

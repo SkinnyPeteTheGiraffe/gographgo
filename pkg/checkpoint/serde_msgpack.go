@@ -59,7 +59,7 @@ func (s *MsgpackSerializer) Serialize(value any) (any, error) {
 }
 
 // DumpsTyped marshals value into a `(type, bytes)` tuple.
-func (s *MsgpackSerializer) DumpsTyped(value any) (string, []byte, error) {
+func (s *MsgpackSerializer) DumpsTyped(value any) (typeName string, payload []byte, err error) {
 	if s == nil {
 		s = &MsgpackSerializer{}
 	}

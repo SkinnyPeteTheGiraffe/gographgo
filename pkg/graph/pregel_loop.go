@@ -22,8 +22,6 @@ type pregelLoopResult struct {
 // pregelLoopOptions carries the runtime parameters for a Pregel superstep loop.
 type pregelLoopOptions[State, Context, Input, Output any] struct {
 	graph           *StateGraph[State, Context, Input, Output]
-	input           Input
-	config          Config
 	store           Store
 	cache           Cache
 	contextValue    any
@@ -31,6 +29,28 @@ type pregelLoopOptions[State, Context, Input, Output any] struct {
 	streamModes     streamModeSet
 	interruptBefore []string // from CompiledStateGraph
 	interruptAfter  []string // from CompiledStateGraph
+	input           Input
+	config          Config
+}
+
+type pregelLoopState[State any] struct {
+	tasks                []pregelTask[State]
+	pendingWrites        []checkpoint.PendingWrite
+	interrupts           []Interrupt
+	channelVersions      map[string]int64
+	versionsSeen         map[string]map[string]int64
+	prevNodes            []string
+	lastUpdatedChannels  []string
+	versionCounter       int64
+	step                 int
+	hasResume            bool
+	isReplaying          bool
+	allowDynamicChannels bool
+}
+
+func (s *pregelLoopState[State]) bumpChannelVersion(channel string) {
+	s.versionCounter++
+	s.channelVersions[channel] = s.versionCounter
 }
 
 // runPregelLoop executes the Pregel superstep loop for a compiled StateGraph.
@@ -57,111 +77,43 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 	g := opts.graph
 	config := opts.config
 	baseNamespace := splitCheckpointNamespace(config.CheckpointNS)
-	requestedCheckpointID := config.CheckpointID
 
 	runtimeSchema := runtimeChannelSchema(g)
 	channels := newPregelChannelMap(runtimeSchema)
 	allowDynamicChannels := allowsDynamicStateChannels[State]()
-
-	var pendingWrites []checkpoint.PendingWrite
-	var loadedTuple *checkpoint.CheckpointTuple
-	if config.Checkpointer != nil && config.ThreadID != "" {
-		tuple, loadErr := config.Checkpointer.GetTuple(ctx, config.CheckpointConfig())
-		if loadErr != nil {
-			return pregelLoopResult{}, fmt.Errorf("loading checkpoint: %w", loadErr)
-		}
-		loadedTuple = tuple
-		if tuple != nil && tuple.Checkpoint != nil {
-			restored, restoreErr := restoreFromCheckpoint(runtimeSchema, tuple.Checkpoint.ChannelValues)
-			if restoreErr != nil {
-				return pregelLoopResult{}, fmt.Errorf("restoring checkpoint channels: %w", restoreErr)
-			}
-			channels = restored
-			pendingWrites = append(pendingWrites, tuple.PendingWrites...)
-			if tuple.Config != nil && tuple.Config.CheckpointID != "" {
-				config.CheckpointID = tuple.Config.CheckpointID
-			}
-		}
-	}
-
-	var (
-		interrupts          []Interrupt
-		prevNodes           []string
-		step                int
-		err                 error
-		lastUpdatedChannels []string
-
-		channelVersions = make(map[string]int64)
-		versionsSeen    = make(map[string]map[string]int64)
-		versionCounter  int64
-	)
-
-	if loadedTuple != nil && loadedTuple.Checkpoint != nil {
-		if len(loadedTuple.Checkpoint.ChannelVersions) > 0 {
-			channelVersions = parseVersionMap(loadedTuple.Checkpoint.ChannelVersions)
-		}
-		if len(loadedTuple.Checkpoint.VersionsSeen) > 0 {
-			versionsSeen = parseNestedVersionMap(loadedTuple.Checkpoint.VersionsSeen)
-		}
-		if loadedTuple.Metadata != nil {
-			step = loadedTuple.Metadata.Step + 1
-		}
-	}
-	isReplaying := requestedCheckpointID != "" && loadedTuple != nil && loadedTuple.Checkpoint != nil
-
-	resumeMap, resumeVals, hasResume, cfgErr := resumeConfig(config.Metadata)
-	if cfgErr != nil {
-		return pregelLoopResult{}, cfgErr
-	}
-	if hasResume && (config.Checkpointer == nil || config.ThreadID == "") {
-		return pregelLoopResult{}, fmt.Errorf("interrupt resume requires a checkpointer and thread id")
-	}
-	pendingWrites, _, err = applyResumeWrites(pendingWrites, resumeMap, resumeVals)
+	requestedCheckpointID := config.CheckpointID
+	loadedTuple, pendingWrites, restoredChannels, err := loadPregelCheckpointState(ctx, runtimeSchema, &config)
 	if err != nil {
 		return pregelLoopResult{}, err
 	}
-
-	// Map input into channels unless this invocation is explicitly resuming.
-	if !hasResume && !isReplaying {
-		if err := mapInputToChannels(channels, any(opts.input)); err != nil {
-			return pregelLoopResult{}, fmt.Errorf("mapping input to channels: %w", err)
-		}
-	} else if hasResume {
-		seen := make(map[string]int64, len(channelVersions))
-		for k, v := range channelVersions {
-			seen[k] = v
-		}
-		versionsSeen[pregelInterrupt] = seen
+	if restoredChannels != nil {
+		channels = restoredChannels
 	}
 
-	bumpChannelVersion := func(channel string) {
-		versionCounter++
-		channelVersions[channel] = versionCounter
+	loopState := pregelLoopState[State]{
+		channelVersions:      make(map[string]int64),
+		versionsSeen:         make(map[string]map[string]int64),
+		allowDynamicChannels: allowDynamicChannels,
 	}
-	if len(channelVersions) > 0 {
-		for _, version := range channelVersions {
-			if version > versionCounter {
-				versionCounter = version
-			}
-		}
-	} else {
-		for key, ch := range channels.channels {
-			if ch.IsAvailable() {
-				bumpChannelVersion(key)
-			}
-		}
+	initializeLoopStateFromCheckpoint(&loopState, requestedCheckpointID, loadedTuple)
+	pendingWrites, err = configureLoopResumeAndInput(channels, pendingWrites, opts.input, config, &loopState)
+	if err != nil {
+		return pregelLoopResult{}, err
 	}
+	initializeLoopVersionCounter(channels, &loopState)
 
 	// Prepare initial tasks (step 0: nodes from Start, a TASKS channel is empty).
-	tasks, err := prepareNextTasks(ctx, g, config, channels, pendingWrites, prevNodes, step, false)
+	tasks, err := prepareNextTasks(ctx, g, config, channels, pendingWrites, loopState.prevNodes, loopState.step, false)
 	if err != nil {
 		return pregelLoopResult{}, fmt.Errorf("preparing initial tasks: %w", err)
 	}
-	if hasResume {
+	if loopState.hasResume {
 		if resumed := prepareResumedTasks(g, config, channels, pendingWrites); len(resumed) > 0 {
 			tasks = resumed
 		}
 	}
+	loopState.tasks = tasks
+	loopState.pendingWrites = pendingWrites
 
 	durability := config.Durability
 	if durability == "" {
@@ -171,268 +123,444 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 	asyncCheckpoint := &checkpointAsyncWriter{}
 	defer asyncCheckpoint.Wait()
 
-	for len(tasks) > 0 {
-		if ctx.Err() != nil {
-			return pregelLoopResult{}, ctx.Err()
+	for len(loopState.tasks) > 0 {
+		shouldStop, stepErr := executePregelStep(ctx, opts, g, channels, &config, baseNamespace, durability, asyncCheckpoint, &loopState)
+		if stepErr != nil {
+			return pregelLoopResult{}, stepErr
 		}
-
-		// --- interrupt-before check ---
-		interruptTasksInput := tasks
-		if hasAllInterrupt(opts.interruptBefore) {
-			visible := make([]pregelTask[State], 0, len(tasks))
-			for _, task := range tasks {
-				if taskHasTag(task, TagHidden) {
-					continue
-				}
-				visible = append(visible, task)
-			}
-			interruptTasksInput = visible
-		}
-		if matches := interruptTasks(interruptTasksInput, opts.interruptBefore, channelVersions, versionsSeen); len(matches) > 0 {
-			beforeWrites := make([]checkpoint.PendingWrite, 0, len(matches))
-			for _, task := range matches {
-				iv := NewInterrupt(
-					Dyn(fmt.Sprintf("Interrupted before node: %s", task.name)),
-					fmt.Sprintf("before_%s_%d", task.name, step),
-				)
-				interrupts = append(interrupts, iv)
-				emitInterrupt(opts.streamOut, iv, opts.streamModes, baseNamespace)
-				beforeWrites = append(beforeWrites, checkpoint.PendingWrite{
-					TaskID:  task.id,
-					Channel: pregelInterrupt,
-					Value: interruptWrite{
-						Interrupt: iv,
-						Node:      task.name,
-						Path:      append([]any(nil), task.path...),
-					},
-				})
-			}
-			pendingWrites = mergePendingWrites(pendingWrites, beforeWrites)
+		if shouldStop {
 			break
 		}
-
-		// --- emit task-start events ---
-		for _, task := range tasks {
-			emitTaskStart(opts.streamOut, task, step, opts.streamModes, baseNamespace)
-		}
-
-		// --- execute tasks (concurrent) ---
-		results, taskErr := executeTasks(ctx, g, tasks, executeTasksOptions{
-			config:         config,
-			stepTimeout:    config.StepTimeout,
-			maxConcurrency: config.MaxConcurrency,
-			store:          effectiveStore(config, opts.store),
-			cache:          effectiveCache(config, opts.cache),
-			contextValue:   opts.contextValue,
-			isReplaying:    isReplaying,
-			step:           step,
-			stop:           config.RecursionLimit,
-			streamOut:      opts.streamOut,
-			streamModes:    opts.streamModes,
-			namespace:      baseNamespace,
-		})
-
-		stepPending := collectSpecialWrites(results)
-
-		// --- interrupt-after check ---
-		interruptResultsInput := results
-		if hasAllInterrupt(opts.interruptAfter) {
-			visible := make([]pregelTaskResult, 0, len(results))
-			for _, result := range results {
-				if containsString(result.tags, TagHidden) {
-					continue
-				}
-				visible = append(visible, result)
-			}
-			interruptResultsInput = visible
-		}
-		if matches := interruptResults(interruptResultsInput, opts.interruptAfter, channelVersions, versionsSeen); len(matches) > 0 {
-			afterWrites := make([]checkpoint.PendingWrite, 0, len(matches))
-			for _, r := range matches {
-				iv := NewInterrupt(
-					Dyn(fmt.Sprintf("Interrupted after node: %s", r.node)),
-					fmt.Sprintf("after_%s_%d", r.node, step),
-				)
-				interrupts = append(interrupts, iv)
-				emitInterrupt(opts.streamOut, iv, opts.streamModes, baseNamespace)
-				afterWrites = append(afterWrites, checkpoint.PendingWrite{
-					TaskID:  r.taskID,
-					Channel: pregelInterrupt,
-					Value: interruptWrite{
-						Interrupt: iv,
-						Node:      r.node,
-						Path:      append([]any(nil), r.path...),
-					},
-				})
-			}
-			pendingWrites = mergePendingWrites(pendingWrites, append(stepPending, afterWrites...))
-			// Apply writes before breaking so state is up to date.
-			for _, task := range tasks {
-				markTaskVersionsSeen(task, channelVersions, versionsSeen)
-			}
-			var versionBumped map[string]bool
-			interrupts, versionBumped, _, err = applyTaskWrites(g, channels, tasks, results, interrupts, allowDynamicChannels)
-			if err != nil {
-				return pregelLoopResult{}, fmt.Errorf("applying writes at step %d: %w", step, err)
-			}
-			for key := range versionBumped {
-				bumpChannelVersion(key)
-			}
-			break
-		}
-
-		// --- handle task errors ---
-		if taskErr != nil {
-			// Parent commands propagate immediately to the caller (AsSubgraphNode).
-			// No checkpoint is saved: the subgraph is terminating early so the
-			// parent can apply the command.
-			var pce *parentCommandError
-			if errors.As(taskErr, &pce) {
-				return pregelLoopResult{}, taskErr
-			}
-			pendingWrites = mergePendingWrites(pendingWrites, stepPending)
-			if config.Checkpointer != nil && config.ThreadID != "" {
-				if durability == DurabilityAsync {
-					asyncCheckpoint.Wait()
-				}
-				saveCheckpoint(ctx, config, channels, step, channelVersions, versionsSeen, nil, nil, pendingWrites, opts.streamOut, opts.streamModes, baseNamespace)
-			}
-			return pregelLoopResult{}, taskErr
-		}
-		pendingWrites = mergePendingWrites(pendingWrites, stepPending)
-
-		hasNodeInterrupt := false
-		for _, r := range results {
-			if len(r.interrupts) > 0 {
-				hasNodeInterrupt = true
-				break
-			}
-		}
-
-		// --- emit task-finish / update events ---
-		for _, r := range results {
-			emitTaskFinish(opts.streamOut, r, step, opts.streamModes, baseNamespace)
-		}
-
-		// --- apply writes to channels ---
-		// This includes any Send objects written to the TASKS channel by
-		// nodes that called GetSend(ctx) or returned a Command with Goto.
-		for _, task := range tasks {
-			markTaskVersionsSeen(task, channelVersions, versionsSeen)
-		}
-		var (
-			versionBumped map[string]bool
-			updated       map[string]bool
-		)
-		interrupts, versionBumped, updated, err = applyTaskWrites(g, channels, tasks, results, interrupts, allowDynamicChannels)
-		if err != nil {
-			return pregelLoopResult{}, fmt.Errorf("applying writes at step %d: %w", step, err)
-		}
-		for key := range versionBumped {
-			bumpChannelVersion(key)
-		}
-		lastUpdatedChannels = updatedChannelsFromChanged(updated)
-		if hasNodeInterrupt {
-			break
-		}
-
-		// --- emit values/updates stream events ---
-		for _, r := range results {
-			emitUpdate(opts.streamOut, g, channels, r, step, opts.streamModes, baseNamespace)
-		}
-
-		// --- advance step counter ---
-		completedNodes := make([]string, 0, len(tasks))
-		for _, t := range tasks {
-			completedNodes = append(completedNodes, t.name)
-		}
-		prevNodes = completedNodes
-		step++
-
-		if step >= config.RecursionLimit {
-			return pregelLoopResult{}, &GraphRecursionError{
-				Message: fmt.Sprintf("recursion limit of %d exceeded", config.RecursionLimit),
-			}
-		}
-
-		// --- prepare next tasks ---
-		// prepareNextTasks reads the TASKS channel (which now has the Send
-		// objects written by this step's tasks) to create PUSH tasks. Calling
-		// step lifecycle updates in applyTaskWrites keeps this data valid.
-		tasks, err = prepareNextTasks(ctx, g, config, channels, pendingWrites, prevNodes, step, false)
-		if err != nil {
-			return pregelLoopResult{}, fmt.Errorf("preparing tasks at step %d: %w", step, err)
-		}
-
-		finished := make(map[string]bool)
-		if len(tasks) == 0 {
-			finished = finishChannels(channels)
-			for channel := range finished {
-				bumpChannelVersion(channel)
-			}
-			if len(finished) > 0 {
-				lastUpdatedChannels = updatedChannelsFromChanged(finished)
-				tasks, err = prepareNextTasks(ctx, g, config, channels, pendingWrites, prevNodes, step, true)
-				if err != nil {
-					return pregelLoopResult{}, fmt.Errorf("preparing deferred tasks at step %d: %w", step, err)
-				}
-			}
-		}
-		checkpointChanged := mergeChangedChannels(updated, finished)
-
-		// --- checkpoint ---
-		checkpointByDurability(ctx, durability, asyncCheckpoint, checkpointSnapshot{
-			config:          config,
-			channels:        channels,
-			step:            step,
-			channelVersions: channelVersions,
-			versionsSeen:    versionsSeen,
-			updatedChannels: updatedChannelsFromChanged(checkpointChanged),
-			next:            nextNodeNames(tasks),
-			pendingWrites:   pendingWrites,
-			streamOut:       opts.streamOut,
-			streamModes:     opts.streamModes,
-			namespace:       baseNamespace,
-		})
 	}
+	return finalizePregelLoop(ctx, opts, channels, baseNamespace, config, durability, asyncCheckpoint, loopState)
+}
 
+func finalizePregelLoop[State, Context, Input, Output any](
+	ctx context.Context,
+	opts pregelLoopOptions[State, Context, Input, Output],
+	channels *pregelChannelMap,
+	baseNamespace []string,
+	config Config,
+	durability DurabilityMode,
+	asyncCheckpoint *checkpointAsyncWriter,
+	loopState pregelLoopState[State],
+) (pregelLoopResult, error) {
 	if config.Checkpointer != nil && config.ThreadID != "" {
 		if durability == DurabilityAsync {
 			asyncCheckpoint.Wait()
 		}
-		saveCheckpoint(ctx, config, channels, step, channelVersions, versionsSeen, lastUpdatedChannels, nil, pendingWrites, opts.streamOut, opts.streamModes, baseNamespace)
+		saveCheckpoint(ctx, config, channels, loopState.step, loopState.channelVersions, loopState.versionsSeen, loopState.lastUpdatedChannels, nil, loopState.pendingWrites, opts.streamOut, opts.streamModes, baseNamespace)
 	}
-
-	// Finish all channels.
 	channels.finishAll()
-
-	// Build full state for streaming.
 	state, err := stateFromChannels[State](channels)
 	if err != nil {
 		return pregelLoopResult{}, fmt.Errorf("building output state: %w", err)
 	}
-
-	// Emit final values event using the full state.
-	if opts.streamOut != nil && opts.streamModes.enabled(StreamModeValues) {
-		opts.streamOut <- StreamPart{
-			Type:      StreamModeValues,
-			Data:      state,
-			Namespace: append([]string(nil), baseNamespace...),
-		}
-	}
-
-	// Build the caller-facing output from the Output type's channels.
-	// When Output == State this is equivalent; when Output is a distinct
-	// subset schema only its fields are populated from the channel map.
+	emitFinalValues(opts.streamOut, opts.streamModes, baseNamespace, state)
 	output, err := stateFromChannels[Output](channels)
 	if err != nil {
 		return pregelLoopResult{}, fmt.Errorf("building graph output: %w", err)
 	}
+	return pregelLoopResult{output: output, interrupts: loopState.interrupts}, nil
+}
 
-	return pregelLoopResult{
-		output:     output,
-		interrupts: interrupts,
-	}, nil
+func emitFinalValues(out chan<- StreamPart, modes streamModeSet, namespace []string, state any) {
+	if out == nil || !modes.enabled(StreamModeValues) {
+		return
+	}
+	out <- StreamPart{Type: StreamModeValues, Data: state, Namespace: append([]string(nil), namespace...)}
+}
+
+func loadPregelCheckpointState(
+	ctx context.Context,
+	runtimeSchema map[string]Channel,
+	config *Config,
+) (tuple *checkpoint.CheckpointTuple, pendingWrites []checkpoint.PendingWrite, channels *pregelChannelMap, err error) {
+	if config == nil || config.Checkpointer == nil || config.ThreadID == "" {
+		return nil, nil, nil, nil
+	}
+	tuple, err = config.Checkpointer.GetTuple(ctx, config.CheckpointConfig())
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("loading checkpoint: %w", err)
+	}
+	if tuple == nil || tuple.Checkpoint == nil {
+		return tuple, nil, nil, nil
+	}
+	restored, restoreErr := restoreFromCheckpoint(runtimeSchema, tuple.Checkpoint.ChannelValues)
+	if restoreErr != nil {
+		return nil, nil, nil, fmt.Errorf("restoring checkpoint channels: %w", restoreErr)
+	}
+	pendingWrites = append(pendingWrites, tuple.PendingWrites...)
+	if tuple.Config != nil && tuple.Config.CheckpointID != "" {
+		config.CheckpointID = tuple.Config.CheckpointID
+	}
+	return tuple, pendingWrites, restored, nil
+}
+
+func initializeLoopStateFromCheckpoint[State any](
+	state *pregelLoopState[State],
+	requestedCheckpointID string,
+	tuple *checkpoint.CheckpointTuple,
+) {
+	if tuple != nil && tuple.Checkpoint != nil {
+		if len(tuple.Checkpoint.ChannelVersions) > 0 {
+			state.channelVersions = parseVersionMap(tuple.Checkpoint.ChannelVersions)
+		}
+		if len(tuple.Checkpoint.VersionsSeen) > 0 {
+			state.versionsSeen = parseNestedVersionMap(tuple.Checkpoint.VersionsSeen)
+		}
+		if tuple.Metadata != nil {
+			state.step = tuple.Metadata.Step + 1
+		}
+	}
+	state.isReplaying = requestedCheckpointID != "" && tuple != nil && tuple.Checkpoint != nil
+}
+
+func configureLoopResumeAndInput[State, Input any](
+	channels *pregelChannelMap,
+	pendingWrites []checkpoint.PendingWrite,
+	input Input,
+	config Config,
+	state *pregelLoopState[State],
+) ([]checkpoint.PendingWrite, error) {
+	resumeMap, resumeVals, hasResume, err := resumeConfig(config.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	if hasResume && (config.Checkpointer == nil || config.ThreadID == "") {
+		return nil, fmt.Errorf("interrupt resume requires a checkpointer and thread id")
+	}
+	pendingWrites, _, err = applyResumeWrites(pendingWrites, resumeMap, resumeVals)
+	if err != nil {
+		return nil, err
+	}
+	if !hasResume && !state.isReplaying {
+		if err := mapInputToChannels(channels, any(input)); err != nil {
+			return nil, fmt.Errorf("mapping input to channels: %w", err)
+		}
+	} else if hasResume {
+		seen := make(map[string]int64, len(state.channelVersions))
+		for key, version := range state.channelVersions {
+			seen[key] = version
+		}
+		state.versionsSeen[pregelInterrupt] = seen
+	}
+	state.hasResume = hasResume
+	return pendingWrites, nil
+}
+
+func initializeLoopVersionCounter[State any](channels *pregelChannelMap, state *pregelLoopState[State]) {
+	if len(state.channelVersions) > 0 {
+		for _, version := range state.channelVersions {
+			if version > state.versionCounter {
+				state.versionCounter = version
+			}
+		}
+		return
+	}
+	for key, channel := range channels.channels {
+		if channel.IsAvailable() {
+			state.bumpChannelVersion(key)
+		}
+	}
+}
+
+func executePregelStep[State, Context, Input, Output any](
+	ctx context.Context,
+	opts pregelLoopOptions[State, Context, Input, Output],
+	g *StateGraph[State, Context, Input, Output],
+	channels *pregelChannelMap,
+	config *Config,
+	baseNamespace []string,
+	durability DurabilityMode,
+	asyncCheckpoint *checkpointAsyncWriter,
+	state *pregelLoopState[State],
+) (bool, error) {
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if stopped, err := maybeInterruptBeforeStep(opts, baseNamespace, state); stopped || err != nil {
+		return stopped, err
+	}
+
+	for _, task := range state.tasks {
+		emitTaskStart(opts.streamOut, task, state.step, opts.streamModes, baseNamespace)
+	}
+
+	results, taskErr := executeTasks(ctx, g, state.tasks, executeTasksOptions{
+		config:         config,
+		stepTimeout:    config.StepTimeout,
+		maxConcurrency: config.MaxConcurrency,
+		store:          effectiveStore(*config, opts.store),
+		cache:          effectiveCache(*config, opts.cache),
+		contextValue:   opts.contextValue,
+		isReplaying:    state.isReplaying,
+		step:           state.step,
+		stop:           config.RecursionLimit,
+		streamOut:      opts.streamOut,
+		streamModes:    opts.streamModes,
+		namespace:      baseNamespace,
+	})
+
+	stepPending := collectSpecialWrites(results)
+	if stopped, err := maybeInterruptAfterStep(opts, g, channels, baseNamespace, results, stepPending, state); stopped || err != nil {
+		return stopped, err
+	}
+	if err := handlePregelTaskError(ctx, *config, channels, durability, asyncCheckpoint, opts, taskErr, stepPending, state); err != nil {
+		return false, err
+	}
+
+	hasNodeInterrupt := resultSetHasNodeInterrupt(results)
+	for _, r := range results {
+		emitTaskFinish(opts.streamOut, r, state.step, opts.streamModes, baseNamespace)
+	}
+	updated, err := applyResultsToChannels(g, channels, results, state)
+	if err != nil {
+		return false, fmt.Errorf("applying writes at step %d: %w", state.step, err)
+	}
+	state.lastUpdatedChannels = updatedChannelsFromChanged(updated)
+	if hasNodeInterrupt {
+		return true, nil
+	}
+
+	for _, r := range results {
+		emitUpdate(opts.streamOut, g, channels, r, state.step, opts.streamModes, baseNamespace)
+	}
+	if err := advancePregelStep(ctx, g, channels, *config, opts, baseNamespace, durability, asyncCheckpoint, updated, state); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+func maybeInterruptBeforeStep[State, Context, Input, Output any](
+	opts pregelLoopOptions[State, Context, Input, Output],
+	baseNamespace []string,
+	state *pregelLoopState[State],
+) (bool, error) {
+	interruptTasksInput := state.tasks
+	if hasAllInterrupt(opts.interruptBefore) {
+		interruptTasksInput = visibleTasksForInterruptBefore(state.tasks)
+	}
+	matches := interruptTasks(interruptTasksInput, opts.interruptBefore, state.channelVersions, state.versionsSeen)
+	if len(matches) == 0 {
+		return false, nil
+	}
+	beforeWrites := make([]checkpoint.PendingWrite, 0, len(matches))
+	for _, task := range matches {
+		iv := NewInterrupt(
+			Dyn(fmt.Sprintf("Interrupted before node: %s", task.name)),
+			fmt.Sprintf("before_%s_%d", task.name, state.step),
+		)
+		state.interrupts = append(state.interrupts, iv)
+		emitInterrupt(opts.streamOut, iv, opts.streamModes, baseNamespace)
+		beforeWrites = append(beforeWrites, checkpoint.PendingWrite{
+			TaskID:  task.id,
+			Channel: pregelInterrupt,
+			Value: interruptWrite{
+				Interrupt: iv,
+				Node:      task.name,
+				Path:      append([]any(nil), task.path...),
+			},
+		})
+	}
+	state.pendingWrites = mergePendingWrites(state.pendingWrites, beforeWrites)
+	return true, nil
+}
+
+func visibleTasksForInterruptBefore[State any](tasks []pregelTask[State]) []pregelTask[State] {
+	visible := make([]pregelTask[State], 0, len(tasks))
+	for _, task := range tasks {
+		if taskHasTag(task, TagHidden) {
+			continue
+		}
+		visible = append(visible, task)
+	}
+	return visible
+}
+
+func maybeInterruptAfterStep[State, Context, Input, Output any](
+	opts pregelLoopOptions[State, Context, Input, Output],
+	g *StateGraph[State, Context, Input, Output],
+	channels *pregelChannelMap,
+	baseNamespace []string,
+	results []pregelTaskResult,
+	stepPending []checkpoint.PendingWrite,
+	state *pregelLoopState[State],
+) (bool, error) {
+	interruptResultsInput := results
+	if hasAllInterrupt(opts.interruptAfter) {
+		interruptResultsInput = visibleTaskResultsForInterruptAfter(results)
+	}
+	matches := interruptResults(interruptResultsInput, opts.interruptAfter, state.channelVersions, state.versionsSeen)
+	if len(matches) == 0 {
+		return false, nil
+	}
+	afterWrites := make([]checkpoint.PendingWrite, 0, len(matches))
+	for _, r := range matches {
+		iv := NewInterrupt(
+			Dyn(fmt.Sprintf("Interrupted after node: %s", r.node)),
+			fmt.Sprintf("after_%s_%d", r.node, state.step),
+		)
+		state.interrupts = append(state.interrupts, iv)
+		emitInterrupt(opts.streamOut, iv, opts.streamModes, baseNamespace)
+		afterWrites = append(afterWrites, checkpoint.PendingWrite{
+			TaskID:  r.taskID,
+			Channel: pregelInterrupt,
+			Value: interruptWrite{
+				Interrupt: iv,
+				Node:      r.node,
+				Path:      append([]any(nil), r.path...),
+			},
+		})
+	}
+	state.pendingWrites = mergePendingWrites(state.pendingWrites, append(stepPending, afterWrites...))
+	for _, task := range state.tasks {
+		markTaskVersionsSeen(task, state.channelVersions, state.versionsSeen)
+	}
+	var versionBumped map[string]bool
+	var err error
+	state.interrupts, versionBumped, _, err = applyTaskWrites(g, channels, state.tasks, results, state.interrupts, state.allowDynamicChannels)
+	if err != nil {
+		return false, fmt.Errorf("applying writes at step %d: %w", state.step, err)
+	}
+	for key := range versionBumped {
+		state.bumpChannelVersion(key)
+	}
+	return true, nil
+}
+
+func visibleTaskResultsForInterruptAfter(results []pregelTaskResult) []pregelTaskResult {
+	visible := make([]pregelTaskResult, 0, len(results))
+	for _, result := range results {
+		if containsString(result.tags, TagHidden) {
+			continue
+		}
+		visible = append(visible, result)
+	}
+	return visible
+}
+
+func handlePregelTaskError[State, Context, Input, Output any](
+	ctx context.Context,
+	config Config,
+	channels *pregelChannelMap,
+	durability DurabilityMode,
+	asyncCheckpoint *checkpointAsyncWriter,
+	opts pregelLoopOptions[State, Context, Input, Output],
+	taskErr error,
+	stepPending []checkpoint.PendingWrite,
+	state *pregelLoopState[State],
+) error {
+	state.pendingWrites = mergePendingWrites(state.pendingWrites, stepPending)
+	if taskErr == nil {
+		return nil
+	}
+	var pce *parentCommandError
+	if errors.As(taskErr, &pce) {
+		return taskErr
+	}
+	if config.Checkpointer != nil && config.ThreadID != "" {
+		if durability == DurabilityAsync {
+			asyncCheckpoint.Wait()
+		}
+		saveCheckpoint(ctx, config, channels, state.step, state.channelVersions, state.versionsSeen, nil, nil, state.pendingWrites, opts.streamOut, opts.streamModes, splitCheckpointNamespace(config.CheckpointNS))
+	}
+	return taskErr
+}
+
+func resultSetHasNodeInterrupt(results []pregelTaskResult) bool {
+	for _, r := range results {
+		if len(r.interrupts) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func applyResultsToChannels[State, Context, Input, Output any](
+	g *StateGraph[State, Context, Input, Output],
+	channels *pregelChannelMap,
+	results []pregelTaskResult,
+	state *pregelLoopState[State],
+) (map[string]bool, error) {
+	for _, task := range state.tasks {
+		markTaskVersionsSeen(task, state.channelVersions, state.versionsSeen)
+	}
+	var (
+		versionBumped map[string]bool
+		updated       map[string]bool
+		err           error
+	)
+	state.interrupts, versionBumped, updated, err = applyTaskWrites(g, channels, state.tasks, results, state.interrupts, state.allowDynamicChannels)
+	if err != nil {
+		return nil, err
+	}
+	for key := range versionBumped {
+		state.bumpChannelVersion(key)
+	}
+	return updated, nil
+}
+
+func advancePregelStep[State, Context, Input, Output any](
+	ctx context.Context,
+	g *StateGraph[State, Context, Input, Output],
+	channels *pregelChannelMap,
+	config Config,
+	opts pregelLoopOptions[State, Context, Input, Output],
+	baseNamespace []string,
+	durability DurabilityMode,
+	asyncCheckpoint *checkpointAsyncWriter,
+	updated map[string]bool,
+	state *pregelLoopState[State],
+) error {
+	state.prevNodes = completedTaskNodeNames(state.tasks)
+	state.step++
+	if state.step >= config.RecursionLimit {
+		return &GraphRecursionError{Message: fmt.Sprintf("recursion limit of %d exceeded", config.RecursionLimit)}
+	}
+
+	tasks, err := prepareNextTasks(ctx, g, config, channels, state.pendingWrites, state.prevNodes, state.step, false)
+	if err != nil {
+		return fmt.Errorf("preparing tasks at step %d: %w", state.step, err)
+	}
+	state.tasks = tasks
+	finished := make(map[string]bool)
+	if len(state.tasks) == 0 {
+		finished = finishChannels(channels)
+		for channel := range finished {
+			state.bumpChannelVersion(channel)
+		}
+		if len(finished) > 0 {
+			state.lastUpdatedChannels = updatedChannelsFromChanged(finished)
+			state.tasks, err = prepareNextTasks(ctx, g, config, channels, state.pendingWrites, state.prevNodes, state.step, true)
+			if err != nil {
+				return fmt.Errorf("preparing deferred tasks at step %d: %w", state.step, err)
+			}
+		}
+	}
+	checkpointChanged := mergeChangedChannels(updated, finished)
+	checkpointByDurability(ctx, durability, asyncCheckpoint, checkpointSnapshot{
+		config:          &config,
+		channels:        channels,
+		step:            state.step,
+		channelVersions: state.channelVersions,
+		versionsSeen:    state.versionsSeen,
+		updatedChannels: updatedChannelsFromChanged(checkpointChanged),
+		next:            nextNodeNames(state.tasks),
+		pendingWrites:   state.pendingWrites,
+		streamOut:       opts.streamOut,
+		streamModes:     opts.streamModes,
+		namespace:       baseNamespace,
+	})
+	return nil
+}
+
+func completedTaskNodeNames[State any](tasks []pregelTask[State]) []string {
+	nodes := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		nodes = append(nodes, task.name)
+	}
+	return nodes
 }
 
 // executeTasks runs all tasks for a superstep concurrently, collecting their
@@ -443,18 +571,18 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 // Mirrors Python LangGraph's BackgroundExecutor / AsyncBackgroundExecutor
 // parallel task execution model.
 type executeTasksOptions struct {
-	config         Config
-	stepTimeout    time.Duration
-	maxConcurrency int
+	config         *Config
 	store          Store
 	cache          Cache
 	contextValue   any
-	isReplaying    bool
-	step           int
-	stop           int
 	streamOut      chan<- StreamPart
 	streamModes    streamModeSet
 	namespace      []string
+	stepTimeout    time.Duration
+	maxConcurrency int
+	step           int
+	stop           int
+	isReplaying    bool
 }
 
 func executeTasks[State, Context, Input, Output any](
@@ -464,7 +592,6 @@ func executeTasks[State, Context, Input, Output any](
 	opts executeTasksOptions,
 ) ([]pregelTaskResult, error) {
 	results := make([]pregelTaskResult, len(tasks))
-	futures := make([]*taskFuture, len(tasks))
 	waitCtx := ctx
 	var cancel context.CancelFunc
 	if opts.stepTimeout > 0 {
@@ -474,68 +601,101 @@ func executeTasks[State, Context, Input, Output any](
 
 	executor := newBackgroundExecutor(waitCtx, opts.maxConcurrency)
 	defer executor.close()
-
-	for i, task := range tasks {
-		if task.call != nil {
-			futures[i] = executor.submit(func(taskCtx context.Context) pregelTaskResult {
-				return executeCallTask(taskCtx, task, opts)
-			})
-			continue
-		}
-
-		node := g.nodes[task.name]
-		if node == nil {
-			return results, fmt.Errorf("node '%s' not found", task.name)
-		}
-
-		futures[i] = executor.submit(func(taskCtx context.Context) pregelTaskResult {
-			return executeTask(taskCtx, node, task, executeTaskOptions[State]{
-				config:       opts.config,
-				store:        opts.store,
-				cache:        opts.cache,
-				contextValue: opts.contextValue,
-				isReplaying:  opts.isReplaying,
-				step:         opts.step,
-				stop:         opts.stop,
-				managed:      g.managed,
-				streamOut:    opts.streamOut,
-				streamModes:  opts.streamModes,
-				namespace:    opts.namespace,
-			})
-		})
-	}
-
-	if err := awaitTaskResults(waitCtx, futures, results); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && opts.stepTimeout > 0 {
-			return results, &GraphStepTimeoutError{Step: opts.step, Timeout: opts.stepTimeout}
-		}
+	futures, err := submitTaskFutures(executor, g, tasks, opts)
+	if err != nil {
 		return results, err
 	}
+	if err := awaitTaskResults(waitCtx, futures, results); err != nil {
+		return handleAwaitTaskError(results, err, opts)
+	}
+	return summarizeTaskResults(tasks, results, opts)
+}
 
+func submitTaskFutures[State, Context, Input, Output any](
+	executor *backgroundExecutor,
+	g *StateGraph[State, Context, Input, Output],
+	tasks []pregelTask[State],
+	opts executeTasksOptions,
+) ([]*taskFuture, error) {
+	futures := make([]*taskFuture, len(tasks))
+	for i, task := range tasks {
+		future, err := submitOneTaskFuture(executor, g, task, opts)
+		if err != nil {
+			return nil, err
+		}
+		futures[i] = future
+	}
+	return futures, nil
+}
+
+func submitOneTaskFuture[State, Context, Input, Output any](
+	executor *backgroundExecutor,
+	g *StateGraph[State, Context, Input, Output],
+	task pregelTask[State],
+	opts executeTasksOptions,
+) (*taskFuture, error) {
+	if task.call != nil {
+		return executor.submit(func(taskCtx context.Context) pregelTaskResult {
+			return executeCallTask(taskCtx, task, opts)
+		}), nil
+	}
+	node := g.nodes[task.name]
+	if node == nil {
+		return nil, fmt.Errorf("node '%s' not found", task.name)
+	}
+	return executor.submit(func(taskCtx context.Context) pregelTaskResult {
+		return executeTask(taskCtx, node, task, executeTaskOptions[State]{
+			config:       opts.config,
+			store:        opts.store,
+			cache:        opts.cache,
+			contextValue: opts.contextValue,
+			isReplaying:  opts.isReplaying,
+			step:         opts.step,
+			stop:         opts.stop,
+			managed:      g.managed,
+			streamOut:    opts.streamOut,
+			streamModes:  opts.streamModes,
+			namespace:    opts.namespace,
+		})
+	}), nil
+}
+
+func handleAwaitTaskError(results []pregelTaskResult, err error, opts executeTasksOptions) ([]pregelTaskResult, error) {
+	if errors.Is(err, context.DeadlineExceeded) && opts.stepTimeout > 0 {
+		return results, &GraphStepTimeoutError{Step: opts.step, Timeout: opts.stepTimeout}
+	}
+	return results, err
+}
+
+func summarizeTaskResults[State any](tasks []pregelTask[State], results []pregelTaskResult, opts executeTasksOptions) ([]pregelTaskResult, error) {
 	var first error
 	var firstParentCmd *Command
-	for i := range futures {
+	for i := range results {
 		r := results[i]
 		if r.parentCmd != nil && firstParentCmd == nil {
 			firstParentCmd = r.parentCmd
 		}
-		if r.err != nil && len(r.interrupts) == 0 && first == nil && opts.stepTimeout > 0 && errors.Is(r.err, context.DeadlineExceeded) {
-			first = &GraphStepTimeoutError{Step: opts.step, Timeout: opts.stepTimeout}
-			continue
-		}
-		if r.err != nil && len(r.interrupts) == 0 && first == nil {
-			if tasks[i].call != nil {
-				first = fmt.Errorf("call task '%s': %w", tasks[i].name, r.err)
-			} else {
-				first = fmt.Errorf("node '%s': %w", tasks[i].name, r.err)
-			}
+		if first == nil {
+			first = summarizeTaskError(tasks[i], r, opts)
 		}
 	}
-	// Parent commands take priority: propagate before regular errors.
 	if firstParentCmd != nil {
 		return results, &parentCommandError{cmd: firstParentCmd}
 	}
 	return results, first
+}
+
+func summarizeTaskError[State any](task pregelTask[State], result pregelTaskResult, opts executeTasksOptions) error {
+	if result.err == nil || len(result.interrupts) > 0 {
+		return nil
+	}
+	if opts.stepTimeout > 0 && errors.Is(result.err, context.DeadlineExceeded) {
+		return &GraphStepTimeoutError{Step: opts.step, Timeout: opts.stepTimeout}
+	}
+	if task.call != nil {
+		return fmt.Errorf("call task '%s': %w", task.name, result.err)
+	}
+	return fmt.Errorf("node '%s': %w", task.name, result.err)
 }
 
 func awaitTaskResults(ctx context.Context, futures []*taskFuture, results []pregelTaskResult) error {
@@ -611,30 +771,111 @@ func executeCallTask[State any](ctx context.Context, task pregelTask[State], opt
 // executeTask runs a single node function, handling interrupt signals and
 // Command return values.
 type executeTaskOptions[State any] struct {
-	config       Config
+	config       *Config
 	store        Store
 	cache        Cache
 	contextValue any
-	isReplaying  bool
-	step         int
-	stop         int
 	managed      map[string]ManagedValueSpec
 	streamOut    chan<- StreamPart
 	streamModes  streamModeSet
 	namespace    []string
+	step         int
+	stop         int
+	isReplaying  bool
 }
 
 func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pregelTask[State], opts executeTaskOptions[State]) pregelTaskResult {
 	inputState, inputErr := coerceStateInput[State](task.input)
 	if inputErr != nil {
-		return pregelTaskResult{taskID: task.id, node: task.name, path: append([]any(nil), task.path...), checkpointNS: task.checkpointNS, tags: append([]string(nil), task.tags...), err: fmt.Errorf("invalid task input for node '%s': %w", task.name, inputErr)}
+		result := baseTaskResult(task)
+		result.err = fmt.Errorf("invalid task input for node '%s': %w", task.name, inputErr)
+		return result
 	}
 
-	// Build per-task context: task ID + scratchpad (for interrupt) + Send.
 	sp := &taskScratchpad{resume: task.resumeValues}
+	taskCtx, pgScratch := buildTaskExecutionContext(ctx, task, opts, sp)
+
+	if len(opts.managed) > 0 {
+		resolved, err := applyManagedValuesToState(inputState, opts.managed, pgScratch)
+		if err != nil {
+			result := baseTaskResult(task)
+			result.err = err
+			return result
+		}
+		inputState = resolved
+	}
+
+	var (
+		pendingWrites []pregelWrite
+		mu            sync.Mutex
+	)
+	sp.onResume = func(resume []Dynamic) {
+		mu.Lock()
+		pendingWrites = append(pendingWrites, pregelWrite{channel: pregelResume, value: resumeValues(resume)})
+		mu.Unlock()
+	}
+	taskCtx = WithSend(taskCtx, func(targetNode string, arg Dynamic) {
+		// Write a Send object to the TASKS channel (a Topic) rather than
+		// directly to the target node's channel. prepareNextTasks reads the
+		// TASKS channel in the next superstep and creates PUSH tasks with
+		// Send.Arg as the node input, mirroring Python LangGraph behavior.
+		mu.Lock()
+		pendingWrites = append(pendingWrites, pregelWrite{
+			channel: pregelTasks,
+			value:   Send{Node: targetNode, Arg: arg},
+		})
+		mu.Unlock()
+	})
+	taskCtx = WithCall(taskCtx, func(call Call) {
+		if call.Fn == nil {
+			return
+		}
+		mu.Lock()
+		pendingWrites = append(pendingWrites, pregelWrite{channel: pregelTasks, value: call})
+		mu.Unlock()
+	})
+
+	result, nodeIvs, execErr := executeTaskNode(taskCtx, node, task, inputState, opts)
+	cacheKey := task.cacheKey
+	if execErr == nil {
+		execErr = maybeCacheTaskResult(taskCtx, opts.cache, cacheKey, result, nodeIvs)
+	}
+
+	if len(nodeIvs) > 0 {
+		return interruptedTaskResult(task, nodeIvs, pendingWrites)
+	}
+
+	writes, parentCmd, execErr := taskResultWrites(node, result, execErr)
+	if parentCmd != nil {
+		result := baseTaskResult(task)
+		result.parentCmd = parentCmd
+		return result
+	}
+	writes = append(writes, pendingWrites...)
+	final := baseTaskResult(task)
+	final.writes = writes
+	final.err = execErr
+	return final
+}
+
+func baseTaskResult[State any](task pregelTask[State]) pregelTaskResult {
+	return pregelTaskResult{
+		taskID:       task.id,
+		node:         task.name,
+		path:         append([]any(nil), task.path...),
+		checkpointNS: task.checkpointNS,
+		tags:         append([]string(nil), task.tags...),
+	}
+}
+
+func buildTaskExecutionContext[State any](ctx context.Context, task pregelTask[State], opts executeTaskOptions[State], sp *taskScratchpad) (context.Context, *PregelScratchpad) {
 	taskCtx := context.WithValue(ctx, taskIDContextKey{}, task.id)
 	taskCtx = withTaskScratchpad(taskCtx, sp)
-	taskCtx = WithConfig(taskCtx, opts.config)
+	cfg := DefaultConfig()
+	if opts.config != nil {
+		cfg = *opts.config
+	}
+	taskCtx = WithConfig(taskCtx, cfg)
 	if opts.store != nil {
 		taskCtx = WithStore(taskCtx, opts.store)
 	}
@@ -655,7 +896,7 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 	pgScratch := &PregelScratchpad{
 		Step:          opts.step,
 		Stop:          opts.stop,
-		Config:        &opts.config,
+		Config:        &cfg,
 		Store:         opts.store,
 		ChannelValues: stateToChannelValues(task.input),
 	}
@@ -670,50 +911,19 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 			IsReplaying:          opts.isReplaying,
 		},
 	})
+	return taskCtx, pgScratch
+}
 
-	if len(opts.managed) > 0 {
-		resolved, err := applyManagedValuesToState(inputState, opts.managed, pgScratch)
-		if err != nil {
-			return pregelTaskResult{taskID: task.id, node: task.name, path: append([]any(nil), task.path...), checkpointNS: task.checkpointNS, tags: append([]string(nil), task.tags...), err: err}
-		}
-		inputState = resolved
-	}
-
+func executeTaskNode[State any](
+	taskCtx context.Context,
+	node *NodeSpec[State],
+	task pregelTask[State],
+	inputState State,
+	opts executeTaskOptions[State],
+) (taskResult NodeResult, taskInterrupt []Interrupt, taskErr error) {
 	var (
-		pendingWrites []pregelWrite
-		mu            sync.Mutex
-	)
-	sp.onResume = func(resume []Dynamic) {
-		mu.Lock()
-		pendingWrites = append(pendingWrites, pregelWrite{channel: pregelResume, value: resumeValues(resume)})
-		mu.Unlock()
-	}
-	taskCtx = WithSend(taskCtx, func(targetNode string, arg Dynamic) {
-		// Write a Send object to the TASKS channel (a Topic) rather than
-		// directly to the target node's channel. prepareNextTasks reads the
-		// TASKS channel in the next superstep and creates PUSH tasks with
-		// Send.Arg as the node input, mirroring Python LangGraph behaviour.
-		mu.Lock()
-		pendingWrites = append(pendingWrites, pregelWrite{
-			channel: pregelTasks,
-			value:   Send{Node: targetNode, Arg: arg},
-		})
-		mu.Unlock()
-	})
-	taskCtx = WithCall(taskCtx, func(call Call) {
-		if call.Fn == nil {
-			return
-		}
-		mu.Lock()
-		pendingWrites = append(pendingWrites, pregelWrite{channel: pregelTasks, value: call})
-		mu.Unlock()
-	})
-
-	var (
-		result    NodeResult
-		execErr   error
-		nodeIvs   []Interrupt
-		fromCache bool
+		result  NodeResult
+		nodeIvs []Interrupt
 	)
 
 	runFn := func() (err error) {
@@ -724,7 +934,6 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 					err = &nodeInterruptError{interrupt: sig.interrupt}
 					return
 				}
-				// Re-panic for unrelated panics.
 				panic(r)
 			}
 		}()
@@ -733,113 +942,104 @@ func executeTask[State any](ctx context.Context, node *NodeSpec[State], task pre
 	}
 
 	cacheKey := task.cacheKey
-	canCache := cacheKey != nil
-	if canCache && opts.cache != nil {
-		cached, hit, cacheErr := opts.cache.Get(taskCtx, *cacheKey)
-		if cacheErr != nil {
-			execErr = cacheErr
-		} else if hit {
-			cachedResult, ok := cached.(NodeResult)
-			if !ok {
-				execErr = fmt.Errorf("cache entry for node '%s' has invalid type %T", task.name, cached)
-			} else {
-				result = cachedResult
-				fromCache = true
-			}
-		}
-	}
-
+	fromCache, execErr := loadTaskResultFromCache(taskCtx, opts.cache, cacheKey, task.name, &result)
 	if execErr == nil && !fromCache {
-		if len(node.RetryPolicy) > 0 {
-			execErr = executeWithRetryPolicies(taskCtx, node.RetryPolicy, runFn)
-		} else {
-			execErr = runFn()
-		}
+		execErr = runNodeWithRetry(taskCtx, node, runFn)
 	}
-
 	if execErr == nil && !fromCache && len(task.writers) > 0 {
-		taskMeta := TaskContext[State]{
-			ID:           task.id,
-			Name:         task.name,
-			Path:         append([]any(nil), task.path...),
-			CheckpointNS: task.checkpointNS,
-			Triggers:     append([]string(nil), task.triggers...),
-			Tags:         append([]string(nil), task.tags...),
-			Input:        inputState,
-			IsPush:       task.isPush,
-			InputSchema:  task.inputSchema,
-			Subgraphs:    append([]string(nil), task.subgraphs...),
-		}
-		if task.cacheKey != nil {
-			k := *task.cacheKey
-			taskMeta.CacheKey = &k
-		}
-		for _, writer := range task.writers {
-			result, execErr = writer(taskCtx, taskMeta, result)
-			if execErr != nil {
-				break
-			}
-		}
+		result, execErr = runTaskWriters(taskCtx, task, inputState, result)
 	}
+	return result, nodeIvs, execErr
+}
 
-	if execErr == nil && canCache && opts.cache != nil && len(nodeIvs) == 0 {
-		if err := opts.cache.Set(taskCtx, *cacheKey, result); err != nil {
-			execErr = err
-		}
+func loadTaskResultFromCache(
+	ctx context.Context,
+	cache Cache,
+	cacheKey *CacheKey,
+	nodeName string,
+	result *NodeResult,
+) (bool, error) {
+	if cache == nil || cacheKey == nil {
+		return false, nil
 	}
+	cached, hit, err := cache.Get(ctx, *cacheKey)
+	if err != nil {
+		return false, err
+	}
+	if !hit {
+		return false, nil
+	}
+	cachedResult, ok := cached.(NodeResult)
+	if !ok {
+		return false, fmt.Errorf("cache entry for node '%s' has invalid type %T", nodeName, cached)
+	}
+	*result = cachedResult
+	return true, nil
+}
 
-	// If the node was interrupted, the record interrupt writes (not a fatal error).
-	if len(nodeIvs) > 0 {
-		writes := make([]pregelWrite, len(nodeIvs))
-		for i, iv := range nodeIvs {
-			writes[i] = pregelWrite{channel: pregelInterrupt, value: iv}
-		}
-		writes = append(writes, pendingWrites...)
-		return pregelTaskResult{
-			taskID:       task.id,
-			node:         task.name,
-			path:         append([]any(nil), task.path...),
-			checkpointNS: task.checkpointNS,
-			tags:         append([]string(nil), task.tags...),
-			writes:       writes,
-			interrupts:   nodeIvs,
-			err:          nil, // not a fatal error
-		}
+func runNodeWithRetry[State any](ctx context.Context, node *NodeSpec[State], runFn func() error) error {
+	if node != nil && len(node.RetryPolicy) > 0 {
+		return executeWithRetryPolicies(ctx, node.RetryPolicy, runFn)
 	}
+	return runFn()
+}
 
-	// Convert node output to channel writes.
-	var writes []pregelWrite
-	if execErr == nil {
-		writes, execErr = outputToWrites(node, result)
+func runTaskWriters[State any](ctx context.Context, task pregelTask[State], input State, result NodeResult) (NodeResult, error) {
+	taskMeta := TaskContext[State]{
+		ID:           task.id,
+		Name:         task.name,
+		Path:         append([]any(nil), task.path...),
+		CheckpointNS: task.checkpointNS,
+		Triggers:     append([]string(nil), task.triggers...),
+		Tags:         append([]string(nil), task.tags...),
+		Input:        input,
+		IsPush:       task.isPush,
+		InputSchema:  task.inputSchema,
+		Subgraphs:    append([]string(nil), task.subgraphs...),
 	}
-	if execErr != nil {
-		// Parent command: surface to the loop without a local write or error.
-		// The loop propagates it upward so AsSubgraphNode can apply it to the
-		// enclosing graph.
-		var pce *parentCommandError
-		if errors.As(execErr, &pce) {
-			return pregelTaskResult{
-				taskID:       task.id,
-				node:         task.name,
-				path:         append([]any(nil), task.path...),
-				checkpointNS: task.checkpointNS,
-				tags:         append([]string(nil), task.tags...),
-				parentCmd:    pce.cmd,
-			}
+	if task.cacheKey != nil {
+		k := *task.cacheKey
+		taskMeta.CacheKey = &k
+	}
+	var err error
+	for _, writer := range task.writers {
+		result, err = writer(ctx, taskMeta, result)
+		if err != nil {
+			return result, err
 		}
-		writes = append(writes, pregelWrite{channel: pregelError, value: execErr.Error()})
+	}
+	return result, nil
+}
+
+func maybeCacheTaskResult(ctx context.Context, cache Cache, cacheKey *CacheKey, result NodeResult, interrupts []Interrupt) error {
+	if cache == nil || cacheKey == nil || len(interrupts) > 0 {
+		return nil
+	}
+	return cache.Set(ctx, *cacheKey, result)
+}
+
+func interruptedTaskResult[State any](task pregelTask[State], nodeIvs []Interrupt, pendingWrites []pregelWrite) pregelTaskResult {
+	writes := make([]pregelWrite, 0, len(nodeIvs)+len(pendingWrites))
+	for _, iv := range nodeIvs {
+		writes = append(writes, pregelWrite{channel: pregelInterrupt, value: iv})
 	}
 	writes = append(writes, pendingWrites...)
+	result := baseTaskResult(task)
+	result.writes = writes
+	result.interrupts = nodeIvs
+	return result
+}
 
-	return pregelTaskResult{
-		taskID:       task.id,
-		node:         task.name,
-		path:         append([]any(nil), task.path...),
-		checkpointNS: task.checkpointNS,
-		tags:         append([]string(nil), task.tags...),
-		writes:       writes,
-		err:          execErr,
+func taskResultWrites[State any](node *NodeSpec[State], result NodeResult, execErr error) ([]pregelWrite, *Command, error) {
+	if execErr == nil {
+		writes, err := outputToWrites(node, result)
+		return writes, nil, err
 	}
+	var pce *parentCommandError
+	if errors.As(execErr, &pce) {
+		return nil, pce.cmd, nil
+	}
+	return []pregelWrite{{channel: pregelError, value: execErr.Error()}}, nil, execErr
 }
 
 func effectiveStore(config Config, compiled Store) Store {
@@ -935,48 +1135,67 @@ func applyManagedValuesToState[State any](input State, managed map[string]Manage
 	if len(managed) == 0 {
 		return input, nil
 	}
-	if m, ok := any(input).(map[string]any); ok {
-		out := make(map[string]any, len(m)+len(managed))
-		for k, v := range m {
-			out[k] = v
-		}
-		for name, spec := range managed {
-			out[name] = spec.Get(scratchpad)
-		}
-		if typed, ok := any(out).(State); ok {
-			return typed, nil
-		}
-		var zero State
-		return zero, fmt.Errorf("managed value injection failed converting map to state type")
+	if mapped, ok, err := applyManagedValuesToMapState[State](input, managed, scratchpad); ok || err != nil {
+		return mapped, err
 	}
+	return applyManagedValuesToStructState(input, managed, scratchpad)
+}
 
+func applyManagedValuesToMapState[State any](input State, managed map[string]ManagedValueSpec, scratchpad *PregelScratchpad) (appliedState State, successState bool, applyErr error) {
+	m, ok := any(input).(map[string]any)
+	if !ok {
+		var zero State
+		return zero, false, nil
+	}
+	out := make(map[string]any, len(m)+len(managed))
+	for k, v := range m {
+		out[k] = v
+	}
+	for name, spec := range managed {
+		out[name] = spec.Get(scratchpad)
+	}
+	typed, castOK := any(out).(State)
+	if !castOK {
+		var zero State
+		return zero, true, fmt.Errorf("managed value injection failed converting map to state type")
+	}
+	return typed, true, nil
+}
+
+func applyManagedValuesToStructState[State any](input State, managed map[string]ManagedValueSpec, scratchpad *PregelScratchpad) (State, error) {
 	rv := reflect.ValueOf(input)
 	rt := reflect.TypeOf(input)
-	if rt != nil && rt.Kind() == reflect.Struct {
-		out := reflect.New(rt).Elem()
-		out.Set(rv)
-		for name, spec := range managed {
-			field := out.FieldByName(name)
-			if !field.IsValid() || !field.CanSet() {
-				continue
-			}
-			value := reflect.ValueOf(spec.Get(scratchpad))
-			if !value.IsValid() {
-				continue
-			}
-			if value.Type().AssignableTo(field.Type()) {
-				field.Set(value)
-				continue
-			}
-			if value.Type().ConvertibleTo(field.Type()) {
-				field.Set(value.Convert(field.Type()))
-			}
-		}
-		if typed, ok := out.Interface().(State); ok {
-			return typed, nil
-		}
+	if rt == nil || rt.Kind() != reflect.Struct {
+		return input, nil
+	}
+	out := reflect.New(rt).Elem()
+	out.Set(rv)
+	for name, spec := range managed {
+		applyManagedValueToField(out, name, spec.Get(scratchpad))
+	}
+	typed, ok := out.Interface().(State)
+	if ok {
+		return typed, nil
 	}
 	return input, nil
+}
+
+func applyManagedValueToField(out reflect.Value, name string, raw any) {
+	field := out.FieldByName(name)
+	if !field.IsValid() || !field.CanSet() {
+		return
+	}
+	value := reflect.ValueOf(raw)
+	if !value.IsValid() {
+		return
+	}
+	if value.Type().AssignableTo(field.Type()) {
+		field.Set(value)
+		return
+	}
+	if value.Type().ConvertibleTo(field.Type()) {
+		field.Set(value.Convert(field.Type()))
+	}
 }
 
 // nodeInterruptError wraps an interrupt signal as an error (used internally
@@ -992,53 +1211,65 @@ func (e *nodeInterruptError) Error() string {
 // outputToWrites converts a typed NodeResult into pregel writes.
 func outputToWrites[State any](node *NodeSpec[State], output NodeResult) ([]pregelWrite, error) {
 	if output.Command != nil {
-		stateWrites, sendTargets, _, _, err := commandResult(output.Command)
-		if err != nil {
-			return nil, err
-		}
-		if err := validateCommandDestinations(node, sendTargets); err != nil {
-			return nil, err
-		}
-		writes := stateWrites
-		for _, s := range sendTargets {
-			writes = append(writes, pregelWrite{channel: pregelTasks, value: s})
-		}
-		return writes, nil
+		return outputCommandWrites(node, output.Command)
 	}
-
 	if output.State != nil {
-		state := output.State.Value()
-		if m, ok := state.(map[string]any); ok {
-			writes := make([]pregelWrite, 0, len(m))
-			for k, v := range m {
-				writes = append(writes, pregelWrite{channel: k, value: v})
-			}
-			return writes, nil
-		}
-		rt := reflect.TypeOf(state)
-		rv := reflect.ValueOf(state)
-		if rt.Kind() == reflect.Struct {
-			writes := make([]pregelWrite, 0, rt.NumField())
-			for i := 0; i < rt.NumField(); i++ {
-				f := rt.Field(i)
-				if !f.IsExported() {
-					continue
-				}
-				writes = append(writes, pregelWrite{channel: f.Name, value: rv.Field(i).Interface()})
-			}
-			return writes, nil
-		}
-		return nil, fmt.Errorf("unsupported node state output type %T", state)
+		return outputStateWrites(output.State.Value())
 	}
-
 	if len(output.Writes) == 0 {
 		return nil, nil
 	}
-	writes := make([]pregelWrite, 0, len(output.Writes))
-	for k, v := range output.Writes {
-		writes = append(writes, pregelWrite{channel: k, value: v.Value()})
+	return outputPartialWrites(output.Writes), nil
+}
+
+func outputCommandWrites[State any](node *NodeSpec[State], command *Command) ([]pregelWrite, error) {
+	stateWrites, sendTargets, _, _, err := commandResult(command)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateCommandDestinations(node, sendTargets); err != nil {
+		return nil, err
+	}
+	writes := append([]pregelWrite(nil), stateWrites...)
+	for _, s := range sendTargets {
+		writes = append(writes, pregelWrite{channel: pregelTasks, value: s})
 	}
 	return writes, nil
+}
+
+func outputStateWrites(state any) ([]pregelWrite, error) {
+	if m, ok := state.(map[string]any); ok {
+		writes := make([]pregelWrite, 0, len(m))
+		for k, v := range m {
+			writes = append(writes, pregelWrite{channel: k, value: v})
+		}
+		return writes, nil
+	}
+	rt := reflect.TypeOf(state)
+	if rt != nil && rt.Kind() == reflect.Struct {
+		return outputStructWrites(reflect.ValueOf(state), rt), nil
+	}
+	return nil, fmt.Errorf("unsupported node state output type %T", state)
+}
+
+func outputStructWrites(rv reflect.Value, rt reflect.Type) []pregelWrite {
+	writes := make([]pregelWrite, 0, rt.NumField())
+	for i := 0; i < rt.NumField(); i++ {
+		field := rt.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		writes = append(writes, pregelWrite{channel: field.Name, value: rv.Field(i).Interface()})
+	}
+	return writes
+}
+
+func outputPartialWrites(writes map[string]Dynamic) []pregelWrite {
+	out := make([]pregelWrite, 0, len(writes))
+	for k, v := range writes {
+		out = append(out, pregelWrite{channel: k, value: v.Value()})
+	}
+	return out
 }
 
 func validateCommandDestinations[State any](node *NodeSpec[State], sends []Send) error {
@@ -1218,17 +1449,17 @@ func saveCheckpoint(
 }
 
 type checkpointSnapshot struct {
-	config          Config
+	config          *Config
 	channels        *pregelChannelMap
-	step            int
 	channelVersions map[string]int64
 	versionsSeen    map[string]map[string]int64
+	streamOut       chan<- StreamPart
+	streamModes     streamModeSet
 	updatedChannels []string
 	next            []string
 	pendingWrites   []checkpoint.PendingWrite
-	streamOut       chan<- StreamPart
-	streamModes     streamModeSet
 	namespace       []string
+	step            int
 }
 
 type checkpointAsyncWriter struct {
@@ -1249,14 +1480,14 @@ func (w *checkpointAsyncWriter) Wait() {
 }
 
 func checkpointByDurability(ctx context.Context, durability DurabilityMode, writer *checkpointAsyncWriter, snap checkpointSnapshot) {
-	if snap.config.Checkpointer == nil || snap.config.ThreadID == "" {
+	if snap.config == nil || snap.config.Checkpointer == nil || snap.config.ThreadID == "" {
 		return
 	}
 	switch durability {
 	case DurabilityExit:
 		return
 	case DurabilityAsync:
-		configCopy := snap.config
+		configCopy := *snap.config
 		channelsCopy := snap.channels.snapshot()
 		channelVersionsCopy := cloneVersionMap(snap.channelVersions)
 		versionsSeenCopy := cloneNestedVersionMap(snap.versionsSeen)
@@ -1268,7 +1499,7 @@ func checkpointByDurability(ctx context.Context, durability DurabilityMode, writ
 			saveCheckpointFromSnapshot(ctx, configCopy, channelsCopy, snap.step, channelVersionsCopy, versionsSeenCopy, updatedChannelsCopy, nextCopy, pendingWritesCopy, snap.streamOut, snap.streamModes, namespaceCopy)
 		})
 	default:
-		saveCheckpoint(ctx, snap.config, snap.channels, snap.step, snap.channelVersions, snap.versionsSeen, snap.updatedChannels, snap.next, snap.pendingWrites, snap.streamOut, snap.streamModes, snap.namespace)
+		saveCheckpoint(ctx, *snap.config, snap.channels, snap.step, snap.channelVersions, snap.versionsSeen, snap.updatedChannels, snap.next, snap.pendingWrites, snap.streamOut, snap.streamModes, snap.namespace)
 	}
 }
 
@@ -1431,7 +1662,7 @@ func splitCheckpointNamespace(ns string) []string {
 	return out
 }
 
-func mergeNamespaces(base []string, override []string) []string {
+func mergeNamespaces(base, override []string) []string {
 	if len(override) == 0 {
 		return append([]string(nil), base...)
 	}
@@ -1441,9 +1672,9 @@ func mergeNamespaces(base []string, override []string) []string {
 	return ns
 }
 
-func streamWriterPayload(v any, namespace []string) (StreamMode, any, []string) {
+func streamWriterPayload(v any, namespace []string) (mode StreamMode, data any, outNamespace []string) {
 	if emit, ok := v.(StreamEmit); ok {
-		mode := emit.Mode
+		mode = emit.Mode
 		if mode == "" {
 			mode = StreamModeCustom
 		}

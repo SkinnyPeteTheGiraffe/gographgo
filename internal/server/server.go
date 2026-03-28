@@ -15,33 +15,35 @@ import (
 
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint"
 	graphpkg "github.com/SkinnyPeteTheGiraffe/gographgo/pkg/graph"
+
 	"github.com/google/uuid"
 )
 
 // Server provides HTTP endpoints for threads/runs/state/events.
 type Server struct {
-	mu           sync.RWMutex
 	checkpointer checkpoint.Saver
 	runner       GraphRunner
 	introspector GraphIntrospector
+	threads      map[string]*Thread
+	runs         map[string]map[string]*runRecord
+	state        map[string]map[string]any
+	store        map[string]map[string]map[string]map[string]any
+	assistants   map[string]*assistantRecord
+	crons        map[string]*Cron
+	globalStore  *graphpkg.InMemoryStore
 	apiKey       string
-
-	threads     map[string]*Thread
-	runs        map[string]map[string]*runRecord
-	state       map[string]map[string]any
-	store       map[string]map[string]map[string]map[string]any
-	assistants  map[string]*assistantRecord
-	crons       map[string]*Cron
-	globalStore *graphpkg.InMemoryStore
+	mu           sync.RWMutex
 }
+
+const threadSubresourceStream = "stream"
 
 type runRecord struct {
 	run    *Run
-	events []RunEvent
 	subs   map[int]chan RunEvent
+	done   chan struct{}
+	events []RunEvent
 	nextID int
 	closed bool
-	done   chan struct{}
 }
 
 type assistantRecord struct {
@@ -183,7 +185,7 @@ func (s *Server) handleThreadSubresources(w http.ResponseWriter, r *http.Request
 		s.handleThreadCopy(w, r, threadID)
 	case "history", "checkpoints":
 		s.handleHistory(w, r, threadID)
-	case "stream":
+	case threadSubresourceStream:
 		s.handleThreadStream(w, r, threadID)
 	case "store":
 		s.handleStore(w, r, threadID, parts[2:])
@@ -254,8 +256,8 @@ func (s *Server) handleThreadsSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Metadata map[string]any `json:"metadata,omitempty"`
-		IDs      []string       `json:"ids,omitempty"`
 		Status   string         `json:"status,omitempty"`
+		IDs      []string       `json:"ids,omitempty"`
 		Limit    int            `json:"limit,omitempty"`
 		Offset   int            `json:"offset,omitempty"`
 	}
@@ -329,58 +331,85 @@ func (s *Server) handleThreadsPrune(w http.ResponseWriter, r *http.Request) {
 		writeMethodNotAllowed(w, http.MethodPost)
 		return
 	}
-	var req struct {
-		ThreadIDs []string `json:"thread_ids"`
-		Strategy  string   `json:"strategy,omitempty"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
+	req, strategy, err := decodeThreadsPruneRequest(r)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
+	}
+	if err := s.pruneThreadCheckpoints(r.Context(), req.ThreadIDs, strategy); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.pruneThreadRuntimeState(req.ThreadIDs, strategy)
+	writeJSON(w, http.StatusOK, map[string]any{"pruned_count": len(req.ThreadIDs)})
+}
+
+type threadsPruneRequest struct {
+	Strategy  string   `json:"strategy,omitempty"`
+	ThreadIDs []string `json:"thread_ids"`
+}
+
+func decodeThreadsPruneRequest(r *http.Request) (threadsPruneRequest, checkpoint.PruneStrategy, error) {
+	var req threadsPruneRequest
+	if err := decodeJSON(r, &req); err != nil {
+		return threadsPruneRequest{}, "", err
 	}
 	strategy := checkpoint.PruneStrategy(req.Strategy)
 	if strategy == "" {
 		strategy = checkpoint.PruneStrategyKeepLatest
 	}
 	if strategy != checkpoint.PruneStrategyKeepLatest && strategy != checkpoint.PruneStrategyDelete {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid prune strategy"))
+		return threadsPruneRequest{}, "", fmt.Errorf("invalid prune strategy")
+	}
+	return req, strategy, nil
+}
+
+func (s *Server) pruneThreadCheckpoints(ctx context.Context, threadIDs []string, strategy checkpoint.PruneStrategy) error {
+	if s.checkpointer == nil {
+		return nil
+	}
+	return s.checkpointer.Prune(ctx, threadIDs, strategy)
+}
+
+func (s *Server) pruneThreadRuntimeState(threadIDs []string, strategy checkpoint.PruneStrategy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, threadID := range threadIDs {
+		s.pruneThreadRuntimeStateLocked(threadID, strategy)
+	}
+}
+
+func (s *Server) pruneThreadRuntimeStateLocked(threadID string, strategy checkpoint.PruneStrategy) {
+	runs := s.runs[threadID]
+	switch strategy {
+	case checkpoint.PruneStrategyDelete:
+		delete(s.runs, threadID)
+		delete(s.state, threadID)
+	case checkpoint.PruneStrategyKeepLatest:
+		s.keepLatestRunLocked(runs)
+	}
+}
+
+func (s *Server) keepLatestRunLocked(runs map[string]*runRecord) {
+	if len(runs) <= 1 {
 		return
 	}
-	if s.checkpointer != nil {
-		if err := s.checkpointer.Prune(r.Context(), req.ThreadIDs, strategy); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
+	latestID := ""
+	var latestCreated time.Time
+	for runID, rec := range runs {
+		if rec.run == nil {
+			continue
+		}
+		if latestID == "" || rec.run.CreatedAt.After(latestCreated) {
+			latestID = runID
+			latestCreated = rec.run.CreatedAt
 		}
 	}
-	s.mu.Lock()
-	for _, threadID := range req.ThreadIDs {
-		runs := s.runs[threadID]
-		switch strategy {
-		case checkpoint.PruneStrategyDelete:
-			delete(s.runs, threadID)
-			delete(s.state, threadID)
-		case checkpoint.PruneStrategyKeepLatest:
-			if len(runs) > 1 {
-				latestID := ""
-				var latestCreated time.Time
-				for runID, rec := range runs {
-					if rec.run == nil {
-						continue
-					}
-					if latestID == "" || rec.run.CreatedAt.After(latestCreated) {
-						latestID = runID
-						latestCreated = rec.run.CreatedAt
-					}
-				}
-				for runID := range runs {
-					if runID != latestID {
-						delete(runs, runID)
-					}
-				}
-			}
+	for runID := range runs {
+		if runID != latestID {
+			delete(runs, runID)
 		}
 	}
-	s.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"pruned_count": len(req.ThreadIDs)})
 }
 
 func (s *Server) handleThreadCopy(w http.ResponseWriter, r *http.Request, threadID string) {
@@ -478,7 +507,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, threadID str
 		s.createRun(w, r, threadID)
 		return
 	}
-	if suffix[0] == "stream" {
+	if suffix[0] == threadSubresourceStream {
 		if r.Method != http.MethodPost {
 			writeMethodNotAllowed(w, http.MethodPost)
 			return
@@ -523,7 +552,8 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request, threadID stri
 	w.Header().Set("Content-Location", fmt.Sprintf("/v1/threads/%s/runs/%s", threadID, run.ID))
 	writeJSON(w, http.StatusAccepted, run)
 
-	go s.executeRun(context.Background(), run.ID, threadID)
+	runCtx := context.WithoutCancel(r.Context())
+	go s.executeRun(runCtx, run.ID, threadID)
 }
 
 func (s *Server) createRunLocked(threadID string, req CreateRunRequest) *Run {
@@ -599,7 +629,7 @@ func (s *Server) executeRun(ctx context.Context, runID, threadID string) {
 		cp := checkpoint.EmptyCheckpoint(uuid.New().String())
 		cp.ChannelValues = cloneMap(state)
 		meta := &checkpoint.CheckpointMetadata{Source: "loop", Step: 1, RunID: runID}
-		_, _ = s.checkpointer.Put(context.Background(), &checkpoint.Config{ThreadID: threadID}, cp, meta)
+		_, _ = s.checkpointer.Put(ctx, &checkpoint.Config{ThreadID: threadID}, cp, meta)
 	}
 
 	s.publishEventLocked(rec, RunEvent{Type: "run.completed", ThreadID: threadID, RunID: runID, Timestamp: ended, Payload: map[string]any{"output": cloneMap(result.Output), "status": string(RunStatusSuccess)}})
@@ -686,109 +716,180 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request, threadID st
 		return
 	}
 	if r.Method == http.MethodPost {
-		var req struct {
-			Values       map[string]any `json:"values"`
-			AsNode       string         `json:"as_node,omitempty"`
-			CheckpointID string         `json:"checkpoint_id,omitempty"`
-			Checkpoint   map[string]any `json:"checkpoint,omitempty"`
+		if err := s.handleStatePost(w, r, threadID); err != nil {
+			s.writeStateError(w, err)
 		}
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if req.Values == nil {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("values are required"))
-			return
-		}
-		checkpointID := req.CheckpointID
-		if checkpointID == "" {
-			checkpointID = checkpointIDFromMap(req.Checkpoint)
-		}
-		baseValues := map[string]any{}
-		metaStep := -1
-		if s.checkpointer != nil {
-			tuple, err := s.checkpointer.GetTuple(r.Context(), &checkpoint.Config{ThreadID: threadID, CheckpointID: checkpointID})
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-			if tuple != nil && tuple.Checkpoint != nil {
-				baseValues = cloneMap(tuple.Checkpoint.ChannelValues)
-				if tuple.Metadata != nil {
-					metaStep = tuple.Metadata.Step
-				}
-			}
-		} else if checkpointID != "" {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("checkpoint updates require a configured checkpointer"))
-			return
-		}
-		if len(baseValues) == 0 {
-			s.mu.RLock()
-			baseValues = cloneMap(s.state[threadID])
-			s.mu.RUnlock()
-		}
-		merged := mergeMaps(baseValues, req.Values)
-
-		s.mu.Lock()
-		s.state[threadID] = cloneMap(merged)
-		s.mu.Unlock()
-
-		storedCheckpointID := checkpointID
-		if storedCheckpointID == "" {
-			storedCheckpointID = uuid.New().String()
-		}
-		if s.checkpointer != nil {
-			cp := checkpoint.EmptyCheckpoint(storedCheckpointID)
-			cp.ChannelValues = cloneMap(merged)
-			meta := &checkpoint.CheckpointMetadata{Source: "update", Step: metaStep + 1}
-			if req.AsNode != "" {
-				meta.Extra = map[string]any{"as_node": req.AsNode}
-			}
-			cfg, err := s.checkpointer.Put(r.Context(), &checkpoint.Config{ThreadID: threadID, CheckpointID: checkpointID}, cp, meta)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-			if cfg != nil && cfg.CheckpointID != "" {
-				storedCheckpointID = cfg.CheckpointID
-			}
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"checkpoint": map[string]any{"thread_id": threadID, "checkpoint_id": storedCheckpointID}})
 		return
 	}
+	if err := s.handleStateGet(w, r, threadID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+	}
+}
 
+type stateRequest struct {
+	Values       map[string]any `json:"values"`
+	Checkpoint   map[string]any `json:"checkpoint,omitempty"`
+	AsNode       string         `json:"as_node,omitempty"`
+	CheckpointID string         `json:"checkpoint_id,omitempty"`
+}
+
+type stateUpdateContext struct {
+	baseValues   map[string]any
+	checkpointID string
+	metaStep     int
+}
+
+func (s *Server) handleStatePost(w http.ResponseWriter, r *http.Request, threadID string) error {
+	req, err := decodeStateRequest(r)
+	if err != nil {
+		return err
+	}
+	updateCtx, err := s.loadStateUpdateContext(r.Context(), threadID, req)
+	if err != nil {
+		return err
+	}
+	merged := mergeMaps(updateCtx.baseValues, req.Values)
+	s.storeThreadState(threadID, merged)
+	storedCheckpointID, err := s.persistStateCheckpoint(r.Context(), threadID, req, merged, updateCtx)
+	if err != nil {
+		return err
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"checkpoint": map[string]any{"thread_id": threadID, "checkpoint_id": storedCheckpointID}})
+	return nil
+}
+
+func decodeStateRequest(r *http.Request) (stateRequest, error) {
+	var req stateRequest
+	if err := decodeJSON(r, &req); err != nil {
+		return stateRequest{}, fmt.Errorf("%w: %v", errBadStateRequest, err)
+	}
+	if req.Values == nil {
+		return stateRequest{}, fmt.Errorf("%w: values are required", errBadStateRequest)
+	}
+	return req, nil
+}
+
+func (s *Server) loadStateUpdateContext(ctx context.Context, threadID string, req stateRequest) (stateUpdateContext, error) {
+	checkpointID := req.CheckpointID
+	if checkpointID == "" {
+		checkpointID = checkpointIDFromMap(req.Checkpoint)
+	}
+	updateCtx := stateUpdateContext{baseValues: map[string]any{}, checkpointID: checkpointID, metaStep: -1}
+	if err := s.loadCheckpointState(ctx, threadID, &updateCtx); err != nil {
+		return stateUpdateContext{}, err
+	}
+	if len(updateCtx.baseValues) == 0 {
+		updateCtx.baseValues = s.threadStateValues(threadID)
+	}
+	return updateCtx, nil
+}
+
+func (s *Server) loadCheckpointState(ctx context.Context, threadID string, updateCtx *stateUpdateContext) error {
+	if s.checkpointer == nil {
+		if updateCtx.checkpointID != "" {
+			return errStateCheckpointRequiresCheckpointer
+		}
+		return nil
+	}
+	tuple, err := s.checkpointer.GetTuple(ctx, &checkpoint.Config{ThreadID: threadID, CheckpointID: updateCtx.checkpointID})
+	if err != nil {
+		return err
+	}
+	if tuple == nil || tuple.Checkpoint == nil {
+		return nil
+	}
+	updateCtx.baseValues = cloneMap(tuple.Checkpoint.ChannelValues)
+	if tuple.Metadata != nil {
+		updateCtx.metaStep = tuple.Metadata.Step
+	}
+	return nil
+}
+
+var errStateCheckpointRequiresCheckpointer = fmt.Errorf("checkpoint updates require a configured checkpointer")
+
+var errBadStateRequest = errors.New("bad state request")
+
+func (s *Server) threadStateValues(threadID string) map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneMap(s.state[threadID])
+}
+
+func (s *Server) storeThreadState(threadID string, values map[string]any) {
+	s.mu.Lock()
+	s.state[threadID] = cloneMap(values)
+	s.mu.Unlock()
+}
+
+func (s *Server) persistStateCheckpoint(ctx context.Context, threadID string, req stateRequest, merged map[string]any, updateCtx stateUpdateContext) (string, error) {
+	storedCheckpointID := updateCtx.checkpointID
+	if storedCheckpointID == "" {
+		storedCheckpointID = uuid.New().String()
+	}
+	if s.checkpointer == nil {
+		return storedCheckpointID, nil
+	}
+	cp := checkpoint.EmptyCheckpoint(storedCheckpointID)
+	cp.ChannelValues = cloneMap(merged)
+	meta := &checkpoint.CheckpointMetadata{Source: "update", Step: updateCtx.metaStep + 1}
+	if req.AsNode != "" {
+		meta.Extra = map[string]any{"as_node": req.AsNode}
+	}
+	cfg, err := s.checkpointer.Put(ctx, &checkpoint.Config{ThreadID: threadID, CheckpointID: updateCtx.checkpointID}, cp, meta)
+	if err != nil {
+		return "", err
+	}
+	if cfg != nil && cfg.CheckpointID != "" {
+		storedCheckpointID = cfg.CheckpointID
+	}
+	return storedCheckpointID, nil
+}
+
+func (s *Server) writeStateError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errStateCheckpointRequiresCheckpointer) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if errors.Is(err, errBadStateRequest) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err)
+}
+
+func (s *Server) handleStateGet(w http.ResponseWriter, r *http.Request, threadID string) error {
 	if s.checkpointer != nil {
 		tuple, err := s.checkpointer.GetTuple(r.Context(), &checkpoint.Config{ThreadID: threadID})
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
+			return err
 		}
 		if tuple != nil {
-			meta := map[string]any{}
-			if tuple.Metadata != nil {
-				meta["source"] = tuple.Metadata.Source
-				meta["step"] = tuple.Metadata.Step
-				meta["run_id"] = tuple.Metadata.RunID
-				for k, v := range tuple.Metadata.Extra {
-					meta[k] = v
-				}
-			}
-			writeJSON(w, http.StatusOK, ThreadState{
-				ThreadID:     threadID,
-				CheckpointID: tuple.Checkpoint.ID,
-				Values:       cloneMap(tuple.Checkpoint.ChannelValues),
-				Metadata:     meta,
-				CreatedAt:    parseCheckpointTime(tuple),
-				ParentConfig: checkpointConfigMap(tuple.ParentConfig),
-			})
-			return
+			writeJSON(w, http.StatusOK, threadStateFromTuple(threadID, tuple))
+			return nil
 		}
 	}
+	writeJSON(w, http.StatusOK, ThreadState{ThreadID: threadID, Values: s.threadStateValues(threadID)})
+	return nil
+}
 
-	s.mu.RLock()
-	values := cloneMap(s.state[threadID])
-	s.mu.RUnlock()
-	writeJSON(w, http.StatusOK, ThreadState{ThreadID: threadID, Values: values})
+func threadStateFromTuple(threadID string, tuple *checkpoint.CheckpointTuple) ThreadState {
+	meta := map[string]any{}
+	if tuple.Metadata != nil {
+		meta["source"] = tuple.Metadata.Source
+		meta["step"] = tuple.Metadata.Step
+		meta["run_id"] = tuple.Metadata.RunID
+		for k, v := range tuple.Metadata.Extra {
+			meta[k] = v
+		}
+	}
+	return ThreadState{
+		ThreadID:     threadID,
+		CheckpointID: tuple.Checkpoint.ID,
+		Values:       cloneMap(tuple.Checkpoint.ChannelValues),
+		Metadata:     meta,
+		CreatedAt:    parseCheckpointTime(tuple),
+		ParentConfig: checkpointConfigMap(tuple.ParentConfig),
+	}
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request, threadID string) {
@@ -801,136 +902,100 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request, threadID 
 		return
 	}
 	if r.Method == http.MethodPost {
-		var req struct {
-			Limit      int            `json:"limit,omitempty"`
-			Before     map[string]any `json:"before,omitempty"`
-			Metadata   map[string]any `json:"metadata,omitempty"`
-			Checkpoint map[string]any `json:"checkpoint,omitempty"`
-		}
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		tuples := []*checkpoint.CheckpointTuple{}
-		if s.checkpointer != nil {
-			var err error
-			tuples, err = s.checkpointer.List(
-				r.Context(),
-				&checkpoint.Config{ThreadID: threadID, CheckpointID: checkpointIDFromMap(req.Checkpoint)},
-				checkpoint.ListOptions{Limit: req.Limit, Before: checkpointConfigFromMap(req.Before), Filter: req.Metadata},
-			)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
+		if err := s.handleHistoryPost(w, r, threadID); err != nil {
+			if errors.Is(err, errBadHistoryRequest) {
+				writeError(w, http.StatusBadRequest, err)
 				return
 			}
+			writeError(w, http.StatusInternalServerError, err)
 		}
-		states := make([]ThreadState, 0, len(tuples))
-		for _, tuple := range tuples {
-			state := ThreadState{ThreadID: threadID}
-			if tuple != nil && tuple.Checkpoint != nil {
-				state.CheckpointID = tuple.Checkpoint.ID
-				state.Values = cloneMap(tuple.Checkpoint.ChannelValues)
-			}
-			if tuple != nil && tuple.Metadata != nil {
-				state.Metadata = map[string]any{"source": tuple.Metadata.Source, "step": tuple.Metadata.Step, "run_id": tuple.Metadata.RunID}
-				for k, v := range tuple.Metadata.Extra {
-					state.Metadata[k] = v
-				}
-			}
-			state.CreatedAt = parseCheckpointTime(tuple)
-			state.ParentConfig = checkpointConfigMap(tuple.ParentConfig)
-			states = append(states, state)
-		}
-		writeJSON(w, http.StatusOK, states)
 		return
 	}
+	if err := s.handleHistoryGet(w, r, threadID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+	}
+}
+
+type historyRequest struct {
+	Before     map[string]any `json:"before,omitempty"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
+	Checkpoint map[string]any `json:"checkpoint,omitempty"`
+	Limit      int            `json:"limit,omitempty"`
+}
+
+var errBadHistoryRequest = errors.New("bad history request")
+
+func (s *Server) handleHistoryPost(w http.ResponseWriter, r *http.Request, threadID string) error {
+	req, err := decodeHistoryRequest(r)
+	if err != nil {
+		return err
+	}
+	tuples, err := s.listThreadHistoryTuples(r.Context(), threadID, req)
+	if err != nil {
+		return err
+	}
+	states := make([]ThreadState, 0, len(tuples))
+	for _, tuple := range tuples {
+		states = append(states, threadStateFromHistoryTuple(threadID, tuple))
+	}
+	writeJSON(w, http.StatusOK, states)
+	return nil
+}
+
+func decodeHistoryRequest(r *http.Request) (historyRequest, error) {
+	var req historyRequest
+	if err := decodeJSON(r, &req); err != nil {
+		return historyRequest{}, fmt.Errorf("%w: %v", errBadHistoryRequest, err)
+	}
+	return req, nil
+}
+
+func (s *Server) listThreadHistoryTuples(ctx context.Context, threadID string, req historyRequest) ([]*checkpoint.CheckpointTuple, error) {
+	if s.checkpointer == nil {
+		return []*checkpoint.CheckpointTuple{}, nil
+	}
+	return s.checkpointer.List(
+		ctx,
+		&checkpoint.Config{ThreadID: threadID, CheckpointID: checkpointIDFromMap(req.Checkpoint)},
+		checkpoint.ListOptions{Limit: req.Limit, Before: checkpointConfigFromMap(req.Before), Filter: req.Metadata},
+	)
+}
+
+func threadStateFromHistoryTuple(threadID string, tuple *checkpoint.CheckpointTuple) ThreadState {
+	state := ThreadState{ThreadID: threadID}
+	if tuple != nil && tuple.Checkpoint != nil {
+		state.CheckpointID = tuple.Checkpoint.ID
+		state.Values = cloneMap(tuple.Checkpoint.ChannelValues)
+	}
+	if tuple != nil && tuple.Metadata != nil {
+		state.Metadata = map[string]any{"source": tuple.Metadata.Source, "step": tuple.Metadata.Step, "run_id": tuple.Metadata.RunID}
+		for k, v := range tuple.Metadata.Extra {
+			state.Metadata[k] = v
+		}
+	}
+	state.CreatedAt = parseCheckpointTime(tuple)
+	state.ParentConfig = checkpointConfigMap(tuple.ParentConfig)
+	return state
+}
+
+func (s *Server) handleHistoryGet(w http.ResponseWriter, r *http.Request, threadID string) error {
 	if s.checkpointer == nil {
 		writeJSON(w, http.StatusOK, []*checkpoint.CheckpointTuple{})
-		return
+		return nil
 	}
 	tuples, err := s.checkpointer.List(r.Context(), &checkpoint.Config{ThreadID: threadID}, checkpoint.ListOptions{})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return err
 	}
 	writeJSON(w, http.StatusOK, tuples)
+	return nil
 }
 
 func (s *Server) handleStore(w http.ResponseWriter, r *http.Request, threadID string, suffix []string) {
 	if len(suffix) == 1 && suffix[0] == "namespaces" {
-		if r.Method != http.MethodPost {
-			writeMethodNotAllowed(w, http.MethodPost)
-			return
+		if err := s.handleStoreNamespaces(w, r, threadID); err != nil {
+			s.writeStoreError(w, err)
 		}
-		var req struct {
-			Prefix   []string `json:"prefix,omitempty"`
-			Suffix   []string `json:"suffix,omitempty"`
-			MaxDepth *int     `json:"max_depth,omitempty"`
-			Limit    int      `json:"limit,omitempty"`
-			Offset   int      `json:"offset,omitempty"`
-		}
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if err := rejectUnsupportedStoreNamespaces(req.MaxDepth); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-
-		s.mu.RLock()
-		bucket := s.store[threadID]
-		s.mu.RUnlock()
-		namespaces := make([][]string, 0, len(bucket))
-		for ns := range bucket {
-			parts := strings.Split(ns, ".")
-			if len(req.Prefix) > 0 {
-				if len(parts) < len(req.Prefix) {
-					continue
-				}
-				matched := true
-				for i, part := range req.Prefix {
-					if parts[i] != part {
-						matched = false
-						break
-					}
-				}
-				if !matched {
-					continue
-				}
-			}
-			if len(req.Suffix) > 0 {
-				if len(parts) < len(req.Suffix) {
-					continue
-				}
-				start := len(parts) - len(req.Suffix)
-				matched := true
-				for i, part := range req.Suffix {
-					if parts[start+i] != part {
-						matched = false
-						break
-					}
-				}
-				if !matched {
-					continue
-				}
-			}
-			namespaces = append(namespaces, parts)
-		}
-		sort.Slice(namespaces, func(i, j int) bool {
-			return strings.Join(namespaces[i], ".") < strings.Join(namespaces[j], ".")
-		})
-		if req.Offset > 0 {
-			if req.Offset >= len(namespaces) {
-				namespaces = [][]string{}
-			} else {
-				namespaces = namespaces[req.Offset:]
-			}
-		}
-		if req.Limit > 0 && req.Limit < len(namespaces) {
-			namespaces = namespaces[:req.Limit]
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"namespaces": namespaces})
 		return
 	}
 
@@ -938,55 +1003,188 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request, threadID st
 		http.NotFound(w, r)
 		return
 	}
-	namespace := suffix[0]
-	key := suffix[1]
+	if err := s.handleStoreItem(w, r, threadID, suffix[0], suffix[1]); err != nil {
+		s.writeStoreError(w, err)
+	}
+}
 
+type storeNamespacesRequest struct {
+	MaxDepth *int     `json:"max_depth,omitempty"`
+	Prefix   []string `json:"prefix,omitempty"`
+	Suffix   []string `json:"suffix,omitempty"`
+	Limit    int      `json:"limit,omitempty"`
+	Offset   int      `json:"offset,omitempty"`
+}
+
+type storePutRequest struct {
+	Value map[string]any `json:"value"`
+	Index any            `json:"index,omitempty"`
+	TTL   *int           `json:"ttl,omitempty"`
+}
+
+var errBadStoreRequest = errors.New("bad store request")
+var errStoreKeyNotFound = errors.New("store key not found")
+
+func (s *Server) handleStoreNamespaces(w http.ResponseWriter, r *http.Request, threadID string) error {
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return nil
+	}
+	req, err := decodeStoreNamespacesRequest(r)
+	if err != nil {
+		return err
+	}
+	bucket := s.threadStoreBucket(threadID)
+	namespaces := filterStoreNamespaces(bucket, req)
+	namespaces = applyOffsetLimitNamespaces(namespaces, req.Offset, req.Limit)
+	writeJSON(w, http.StatusOK, map[string]any{"namespaces": namespaces})
+	return nil
+}
+
+func decodeStoreNamespacesRequest(r *http.Request) (storeNamespacesRequest, error) {
+	var req storeNamespacesRequest
+	if err := decodeJSON(r, &req); err != nil {
+		return storeNamespacesRequest{}, fmt.Errorf("%w: %v", errBadStoreRequest, err)
+	}
+	if err := rejectUnsupportedStoreNamespaces(req.MaxDepth); err != nil {
+		return storeNamespacesRequest{}, fmt.Errorf("%w: %v", errBadStoreRequest, err)
+	}
+	return req, nil
+}
+
+func (s *Server) threadStoreBucket(threadID string) map[string]map[string]map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.store[threadID]
+}
+
+func filterStoreNamespaces(bucket map[string]map[string]map[string]any, req storeNamespacesRequest) [][]string {
+	namespaces := make([][]string, 0, len(bucket))
+	for ns := range bucket {
+		parts := strings.Split(ns, ".")
+		if !storeNamespaceMatches(parts, req.Prefix, req.Suffix) {
+			continue
+		}
+		namespaces = append(namespaces, parts)
+	}
+	sort.Slice(namespaces, func(i, j int) bool {
+		return strings.Join(namespaces[i], ".") < strings.Join(namespaces[j], ".")
+	})
+	return namespaces
+}
+
+func storeNamespaceMatches(parts, prefix, suffix []string) bool {
+	return matchNamespacePrefix(parts, prefix) && matchNamespaceSuffix(parts, suffix)
+}
+
+func matchNamespacePrefix(parts, prefix []string) bool {
+	if len(prefix) == 0 {
+		return true
+	}
+	if len(parts) < len(prefix) {
+		return false
+	}
+	for i, part := range prefix {
+		if parts[i] != part {
+			return false
+		}
+	}
+	return true
+}
+
+func matchNamespaceSuffix(parts, suffix []string) bool {
+	if len(suffix) == 0 {
+		return true
+	}
+	if len(parts) < len(suffix) {
+		return false
+	}
+	start := len(parts) - len(suffix)
+	for i, part := range suffix {
+		if parts[start+i] != part {
+			return false
+		}
+	}
+	return true
+}
+
+func applyOffsetLimitNamespaces(namespaces [][]string, offset, limit int) [][]string {
+	if offset > 0 {
+		if offset >= len(namespaces) {
+			return [][]string{}
+		}
+		namespaces = namespaces[offset:]
+	}
+	if limit > 0 && limit < len(namespaces) {
+		namespaces = namespaces[:limit]
+	}
+	return namespaces
+}
+
+func (s *Server) handleStoreItem(w http.ResponseWriter, r *http.Request, threadID, namespace, key string) error {
 	switch r.Method {
 	case http.MethodPut:
-		var req struct {
-			Value map[string]any `json:"value"`
-			Index any            `json:"index,omitempty"`
-			TTL   *int           `json:"ttl,omitempty"`
-		}
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if err := rejectUnsupportedStorePut(req.Index, req.TTL); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		s.mu.Lock()
-		if s.store[threadID] == nil {
-			s.store[threadID] = make(map[string]map[string]map[string]any)
-		}
-		if s.store[threadID][namespace] == nil {
-			s.store[threadID][namespace] = make(map[string]map[string]any)
-		}
-		s.store[threadID][namespace][key] = cloneMap(req.Value)
-		s.mu.Unlock()
-		writeJSON(w, http.StatusOK, StoreValue{Namespace: namespace, Key: key, Value: cloneMap(req.Value)})
+		return s.handleStorePut(w, r, threadID, namespace, key)
 	case http.MethodGet:
-		refreshTTL, err := parseOptionalBoolQueryValue(r.URL.Query().Get("refresh_ttl"))
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if err := rejectUnsupportedStoreSearch(nil, r.URL.Query().Get("query"), refreshTTL); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		s.mu.RLock()
-		v := cloneMap(s.store[threadID][namespace][key])
-		s.mu.RUnlock()
-		if v == nil {
-			writeError(w, http.StatusNotFound, fmt.Errorf("store key not found"))
-			return
-		}
-		writeJSON(w, http.StatusOK, StoreValue{Namespace: namespace, Key: key, Value: v})
+		return s.handleStoreGet(w, r, threadID, namespace, key)
 	default:
 		writeMethodNotAllowed(w, http.MethodGet, http.MethodPut)
+		return nil
 	}
+}
+
+func (s *Server) handleStorePut(w http.ResponseWriter, r *http.Request, threadID, namespace, key string) error {
+	var req storePutRequest
+	if err := decodeJSON(r, &req); err != nil {
+		return fmt.Errorf("%w: %v", errBadStoreRequest, err)
+	}
+	if err := rejectUnsupportedStorePut(req.Index, req.TTL); err != nil {
+		return fmt.Errorf("%w: %v", errBadStoreRequest, err)
+	}
+	s.mu.Lock()
+	if s.store[threadID] == nil {
+		s.store[threadID] = make(map[string]map[string]map[string]any)
+	}
+	if s.store[threadID][namespace] == nil {
+		s.store[threadID][namespace] = make(map[string]map[string]any)
+	}
+	s.store[threadID][namespace][key] = cloneMap(req.Value)
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, StoreValue{Namespace: namespace, Key: key, Value: cloneMap(req.Value)})
+	return nil
+}
+
+func (s *Server) handleStoreGet(w http.ResponseWriter, r *http.Request, threadID, namespace, key string) error {
+	refreshTTL, err := parseOptionalBoolQueryValue(r.URL.Query().Get("refresh_ttl"))
+	if err != nil {
+		return fmt.Errorf("%w: %v", errBadStoreRequest, err)
+	}
+	if err := rejectUnsupportedStoreSearch(nil, r.URL.Query().Get("query"), refreshTTL); err != nil {
+		return fmt.Errorf("%w: %v", errBadStoreRequest, err)
+	}
+	s.mu.RLock()
+	v := cloneMap(s.store[threadID][namespace][key])
+	s.mu.RUnlock()
+	if v == nil {
+		return errStoreKeyNotFound
+	}
+	writeJSON(w, http.StatusOK, StoreValue{Namespace: namespace, Key: key, Value: v})
+	return nil
+}
+
+func (s *Server) writeStoreError(w http.ResponseWriter, err error) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, errBadStoreRequest) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if errors.Is(err, errStoreKeyNotFound) {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err)
 }
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
@@ -1038,14 +1236,14 @@ func (s *Server) handleAssistants(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
 		var req struct {
+			Config      map[string]any `json:"config,omitempty"`
+			Context     map[string]any `json:"context,omitempty"`
+			Metadata    map[string]any `json:"metadata,omitempty"`
 			AssistantID string         `json:"assistant_id,omitempty"`
 			GraphID     string         `json:"graph_id,omitempty"`
 			IfExists    string         `json:"if_exists,omitempty"`
 			Name        string         `json:"name,omitempty"`
 			Description string         `json:"description,omitempty"`
-			Config      map[string]any `json:"config,omitempty"`
-			Context     map[string]any `json:"context,omitempty"`
-			Metadata    map[string]any `json:"metadata,omitempty"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -1116,177 +1314,205 @@ func (s *Server) handleAssistantSubresources(w http.ResponseWriter, r *http.Requ
 		s.handleAssistant(w, r, assistantID)
 		return
 	}
+	resource := parts[1]
+	if resource == "versions" {
+		s.handleAssistantVersions(w, r, assistantID)
+		return
+	}
+	if resource == "latest" {
+		s.handleAssistantLatest(w, r, assistantID)
+		return
+	}
+	if err := s.handleAssistantGraphSubresource(w, r, assistantID, resource, parts); err != nil {
+		if errors.Is(err, errAssistantSubresourceNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, errAssistantSubresourceNotFoundAssistant) {
+			writeError(w, http.StatusNotFound, fmt.Errorf("assistant not found"))
+			return
+		}
+		s.writeAssistantGraphError(w, err)
+	}
+}
 
-	switch parts[1] {
+var errAssistantSubresourceNotFound = errors.New("assistant subresource not found")
+var errAssistantSubresourceNotFoundAssistant = errors.New("assistant not found")
+
+func (s *Server) handleAssistantGraphSubresource(w http.ResponseWriter, r *http.Request, assistantID, resource string, parts []string) error {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, http.MethodGet)
+		return nil
+	}
+	assistant, info, err := s.assistantGraphInfo(r.Context(), assistantID)
+	if err != nil {
+		return err
+	}
+	switch resource {
 	case "graph":
-		if r.Method != http.MethodGet {
-			writeMethodNotAllowed(w, http.MethodGet)
-			return
-		}
-		assistant, ok := s.getAssistant(assistantID)
-		if !ok {
-			writeError(w, http.StatusNotFound, fmt.Errorf("assistant not found"))
-			return
-		}
-		info, err := s.resolveAssistantGraph(r.Context(), assistant)
-		if err != nil {
-			s.writeAssistantGraphError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, AssistantGraphResponse{
-			AssistantID: assistant.ID,
-			GraphID:     assistant.GraphID,
-			Graph:       info,
-			Mermaid:     info.Mermaid(),
-		})
+		writeJSON(w, http.StatusOK, AssistantGraphResponse{AssistantID: assistant.ID, GraphID: assistant.GraphID, Graph: info, Mermaid: info.Mermaid()})
 	case "schemas":
-		if r.Method != http.MethodGet {
-			writeMethodNotAllowed(w, http.MethodGet)
-			return
-		}
-		assistant, ok := s.getAssistant(assistantID)
-		if !ok {
-			writeError(w, http.StatusNotFound, fmt.Errorf("assistant not found"))
-			return
-		}
-		info, err := s.resolveAssistantGraph(r.Context(), assistant)
-		if err != nil {
-			s.writeAssistantGraphError(w, err)
-			return
-		}
 		schemas := info.Schemas()
-		writeJSON(w, http.StatusOK, AssistantSchemasResponse{
-			AssistantID: assistant.ID,
-			GraphID:     assistant.GraphID,
-			Input:       schemas.Input,
-			Output:      schemas.Output,
-			Context:     schemas.Context,
-		})
+		writeJSON(w, http.StatusOK, AssistantSchemasResponse{AssistantID: assistant.ID, GraphID: assistant.GraphID, Input: schemas.Input, Output: schemas.Output, Context: schemas.Context})
 	case "subgraphs":
-		if r.Method != http.MethodGet {
-			writeMethodNotAllowed(w, http.MethodGet)
-			return
-		}
-		assistant, ok := s.getAssistant(assistantID)
-		if !ok {
-			writeError(w, http.StatusNotFound, fmt.Errorf("assistant not found"))
-			return
-		}
-		info, err := s.resolveAssistantGraph(r.Context(), assistant)
-		if err != nil {
-			s.writeAssistantGraphError(w, err)
-			return
-		}
 		namespace := ""
 		if len(parts) > 2 {
 			namespace = strings.Join(parts[2:], "/")
 		}
 		recurse := strings.EqualFold(r.URL.Query().Get("recurse"), "true")
-		subgraphs := filterSubgraphs(info.Subgraphs(), namespace, recurse)
-		out := make([]AssistantSubgraph, 0, len(subgraphs))
-		for _, subgraph := range subgraphs {
-			out = append(out, AssistantSubgraph{
-				Name:       subgraph.Name,
-				ParentNode: subgraph.ParentNode,
-				Namespace:  subgraph.Namespace,
-			})
-		}
-		writeJSON(w, http.StatusOK, AssistantSubgraphsResponse{AssistantID: assistant.ID, GraphID: assistant.GraphID, Subgraphs: out})
-	case "versions":
-		s.handleAssistantVersions(w, r, assistantID)
-	case "latest":
-		s.handleAssistantLatest(w, r, assistantID)
+		writeJSON(w, http.StatusOK, AssistantSubgraphsResponse{AssistantID: assistant.ID, GraphID: assistant.GraphID, Subgraphs: toAssistantSubgraphs(filterSubgraphs(info.Subgraphs(), namespace, recurse))})
 	default:
-		http.NotFound(w, r)
+		return errAssistantSubresourceNotFound
 	}
+	return nil
+}
+
+func (s *Server) assistantGraphInfo(ctx context.Context, assistantID string) (*Assistant, graphpkg.GraphInfo, error) {
+	assistant, ok := s.getAssistant(assistantID)
+	if !ok {
+		return nil, graphpkg.GraphInfo{}, errAssistantSubresourceNotFoundAssistant
+	}
+	info, err := s.resolveAssistantGraph(ctx, assistant)
+	if err != nil {
+		return nil, graphpkg.GraphInfo{}, err
+	}
+	return assistant, info, nil
+}
+
+func toAssistantSubgraphs(subgraphs []graphpkg.GraphSubgraphInfo) []AssistantSubgraph {
+	out := make([]AssistantSubgraph, 0, len(subgraphs))
+	for _, subgraph := range subgraphs {
+		out = append(out, AssistantSubgraph{Name: subgraph.Name, ParentNode: subgraph.ParentNode, Namespace: subgraph.Namespace})
+	}
+	return out
 }
 
 func (s *Server) handleAssistant(w http.ResponseWriter, r *http.Request, assistantID string) {
 	switch r.Method {
 	case http.MethodGet:
-		assistant, ok := s.getAssistant(assistantID)
-		if !ok {
-			writeError(w, http.StatusNotFound, fmt.Errorf("assistant not found"))
-			return
-		}
-		writeJSON(w, http.StatusOK, assistant)
+		s.handleAssistantGet(w, assistantID)
 	case http.MethodPatch:
-		var req struct {
-			GraphID     string         `json:"graph_id,omitempty"`
-			Name        string         `json:"name,omitempty"`
-			Description string         `json:"description,omitempty"`
-			Config      map[string]any `json:"config,omitempty"`
-			Context     map[string]any `json:"context,omitempty"`
-			Metadata    map[string]any `json:"metadata,omitempty"`
-		}
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		now := time.Now().UTC()
-		s.mu.Lock()
-		rec := s.assistants[assistantID]
-		if rec == nil {
-			s.mu.Unlock()
-			writeError(w, http.StatusNotFound, fmt.Errorf("assistant not found"))
-			return
-		}
-		if req.GraphID != "" {
-			rec.assistant.GraphID = req.GraphID
-		}
-		if req.Name != "" {
-			rec.assistant.Name = req.Name
-		}
-		if req.Description != "" {
-			rec.assistant.Description = req.Description
-		}
-		if req.Config != nil {
-			rec.assistant.Config = cloneMap(req.Config)
-		}
-		if req.Context != nil {
-			rec.assistant.Context = cloneMap(req.Context)
-		}
-		if req.Metadata != nil {
-			rec.assistant.Metadata = cloneMap(req.Metadata)
-		}
-		rec.assistant.UpdatedAt = now
-		nextVersion := len(rec.versions) + 1
-		rec.versions = append(rec.versions, AssistantVersion{Version: nextVersion, Metadata: cloneMap(rec.assistant.Metadata), CreatedAt: now})
-		rec.latest = nextVersion
-		assistant := cloneAssistant(rec.assistant)
-		s.mu.Unlock()
-		writeJSON(w, http.StatusOK, assistant)
-	case http.MethodDelete:
-		deleteThreads, err := parseOptionalBoolQuery(r, "delete_threads")
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-
-		deletedThreadIDs := []string(nil)
-		s.mu.Lock()
-		if _, ok := s.assistants[assistantID]; !ok {
-			s.mu.Unlock()
-			writeError(w, http.StatusNotFound, fmt.Errorf("assistant not found"))
-			return
-		}
-		if deleteThreads {
-			deletedThreadIDs = s.deleteAssistantThreadsLocked(assistantID)
-		}
-		delete(s.assistants, assistantID)
-		s.mu.Unlock()
-		if s.checkpointer != nil {
-			for _, threadID := range deletedThreadIDs {
-				if err := s.checkpointer.DeleteThread(r.Context(), threadID); err != nil {
-					writeError(w, http.StatusInternalServerError, err)
-					return
-				}
+		if err := s.handleAssistantPatch(w, r, assistantID); err != nil {
+			if errors.Is(err, errBadAssistantRequest) {
+				writeError(w, http.StatusBadRequest, err)
+			} else {
+				writeError(w, http.StatusNotFound, err)
 			}
 		}
-		w.WriteHeader(http.StatusNoContent)
+	case http.MethodDelete:
+		if err := s.handleAssistantDelete(w, r, assistantID); err != nil {
+			if errors.Is(err, errBadAssistantRequest) {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			if errors.Is(err, errAssistantNotFound) {
+				writeError(w, http.StatusNotFound, err)
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err)
+		}
 	default:
 		writeMethodNotAllowed(w, http.MethodGet, http.MethodPatch, http.MethodDelete)
 	}
+}
+
+var errAssistantNotFound = errors.New("assistant not found")
+var errBadAssistantRequest = errors.New("bad assistant request")
+
+func (s *Server) handleAssistantGet(w http.ResponseWriter, assistantID string) {
+	assistant, ok := s.getAssistant(assistantID)
+	if !ok {
+		writeError(w, http.StatusNotFound, fmt.Errorf("assistant not found"))
+		return
+	}
+	writeJSON(w, http.StatusOK, assistant)
+}
+
+type assistantPatchRequest struct {
+	Config      map[string]any `json:"config,omitempty"`
+	Context     map[string]any `json:"context,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	GraphID     string         `json:"graph_id,omitempty"`
+	Name        string         `json:"name,omitempty"`
+	Description string         `json:"description,omitempty"`
+}
+
+func (s *Server) handleAssistantPatch(w http.ResponseWriter, r *http.Request, assistantID string) error {
+	var req assistantPatchRequest
+	if err := decodeJSON(r, &req); err != nil {
+		return fmt.Errorf("%w: %v", errBadAssistantRequest, err)
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	rec := s.assistants[assistantID]
+	if rec == nil {
+		s.mu.Unlock()
+		return errAssistantNotFound
+	}
+	applyAssistantPatch(rec.assistant, req)
+	rec.assistant.UpdatedAt = now
+	nextVersion := len(rec.versions) + 1
+	rec.versions = append(rec.versions, AssistantVersion{Version: nextVersion, Metadata: cloneMap(rec.assistant.Metadata), CreatedAt: now})
+	rec.latest = nextVersion
+	assistant := cloneAssistant(rec.assistant)
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, assistant)
+	return nil
+}
+
+func applyAssistantPatch(assistant *Assistant, req assistantPatchRequest) {
+	if req.GraphID != "" {
+		assistant.GraphID = req.GraphID
+	}
+	if req.Name != "" {
+		assistant.Name = req.Name
+	}
+	if req.Description != "" {
+		assistant.Description = req.Description
+	}
+	if req.Config != nil {
+		assistant.Config = cloneMap(req.Config)
+	}
+	if req.Context != nil {
+		assistant.Context = cloneMap(req.Context)
+	}
+	if req.Metadata != nil {
+		assistant.Metadata = cloneMap(req.Metadata)
+	}
+}
+
+func (s *Server) handleAssistantDelete(w http.ResponseWriter, r *http.Request, assistantID string) error {
+	deleteThreads, err := parseOptionalBoolQuery(r, "delete_threads")
+	if err != nil {
+		return fmt.Errorf("%w: %v", errBadAssistantRequest, err)
+	}
+	deletedThreadIDs, err := s.deleteAssistantLocked(assistantID, deleteThreads)
+	if err != nil {
+		return err
+	}
+	if s.checkpointer != nil {
+		for _, threadID := range deletedThreadIDs {
+			if err := s.checkpointer.DeleteThread(r.Context(), threadID); err != nil {
+				return err
+			}
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (s *Server) deleteAssistantLocked(assistantID string, deleteThreads bool) ([]string, error) {
+	deletedThreadIDs := []string(nil)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.assistants[assistantID]; !ok {
+		return nil, errAssistantNotFound
+	}
+	if deleteThreads {
+		deletedThreadIDs = s.deleteAssistantThreadsLocked(assistantID)
+	}
+	delete(s.assistants, assistantID)
+	return deletedThreadIDs, nil
 }
 
 func (s *Server) handleAssistantsSearch(w http.ResponseWriter, r *http.Request) {
@@ -1428,7 +1654,7 @@ func (s *Server) handleTopLevelRunSubresources(w http.ResponseWriter, r *http.Re
 	}
 
 	switch parts[0] {
-	case "stream":
+	case threadSubresourceStream:
 		if r.Method != http.MethodPost {
 			writeMethodNotAllowed(w, http.MethodPost)
 			return
@@ -1475,7 +1701,8 @@ func (s *Server) handleRunsBatch(w http.ResponseWriter, r *http.Request) {
 		run := s.createRunLocked(threadID, req)
 		s.mu.Unlock()
 		s.publishEvent(threadID, run.ID, RunEvent{Type: "run.created", ThreadID: threadID, RunID: run.ID, Timestamp: now, Payload: map[string]any{"status": string(RunStatusPending)}})
-		go s.executeRun(context.Background(), run.ID, threadID)
+		runCtx := context.WithoutCancel(r.Context())
+		go s.executeRun(runCtx, run.ID, threadID)
 		out = append(out, *run)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -1488,8 +1715,8 @@ func (s *Server) handleRunsCancelMany(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		ThreadID string   `json:"thread_id,omitempty"`
-		RunIDs   []string `json:"run_ids,omitempty"`
 		Status   string   `json:"status,omitempty"`
+		RunIDs   []string `json:"run_ids,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1553,7 +1780,7 @@ func (s *Server) handleRunSubresource(w http.ResponseWriter, r *http.Request, th
 			return
 		}
 		s.joinRun(w, r, threadID, runID)
-	case "stream":
+	case threadSubresourceStream:
 		if r.Method != http.MethodGet {
 			writeMethodNotAllowed(w, http.MethodGet)
 			return
@@ -1589,7 +1816,8 @@ func (s *Server) streamCreateRun(w http.ResponseWriter, r *http.Request, threadI
 	s.mu.Unlock()
 
 	s.publishEvent(threadID, run.ID, RunEvent{Type: "run.created", ThreadID: threadID, RunID: run.ID, Timestamp: now, Payload: map[string]any{"status": string(RunStatusPending)}})
-	go s.executeRun(context.Background(), run.ID, threadID)
+	runCtx := context.WithoutCancel(r.Context())
+	go s.executeRun(runCtx, run.ID, threadID)
 
 	modes := normalizeStreamModes(req.StreamMode)
 	query := url.Values{}
@@ -1603,17 +1831,42 @@ func (s *Server) streamCreateRun(w http.ResponseWriter, r *http.Request, threadI
 
 func (s *Server) awaitRunCompletionAndStream(ctx context.Context, w http.ResponseWriter, threadID, runID string, modes []string, lastEventID int, cancelOnDisconnect bool) error {
 	modes = normalizeStreamModes(modes)
+	writePart, err := setupRunSSEWriter(w, lastEventID)
+	if err != nil {
+		return err
+	}
+	if err := writeInitialRunMetadata(lastEventID, writePart, threadID, runID, modes); err != nil {
+		return err
+	}
+	rec, replayedEvents, err := s.replayRunEvents(writePart, threadID, runID, modes)
+	if err != nil {
+		return err
+	}
+	ch, subID, closed, missed, err := s.subscribeRunStream(threadID, runID, replayedEvents)
+	if err != nil {
+		return err
+	}
+	if closed {
+		if err := s.writeMissedRunEvents(writePart, threadID, runID, modes, missed); err != nil {
+			return err
+		}
+		return writePart("end", map[string]any{})
+	}
+	defer s.removeSubscriber(threadID, runID, subID)
+	_ = rec
+	return s.streamSubscribedRunEvents(ctx, writePart, threadID, runID, modes, cancelOnDisconnect, ch)
+}
+
+func setupRunSSEWriter(w http.ResponseWriter, lastEventID int) (func(string, any) error, error) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Connection", "keep-alive")
-
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		return fmt.Errorf("streaming unsupported")
+		return nil, fmt.Errorf("streaming unsupported")
 	}
-
 	nextID := 1
-	writePart := func(event string, payload any) error {
+	return func(event string, payload any) error {
 		nextID++
 		if nextID <= lastEventID {
 			return nil
@@ -1623,25 +1876,33 @@ func (s *Server) awaitRunCompletionAndStream(ctx context.Context, w http.Respons
 		}
 		flusher.Flush()
 		return nil
-	}
+	}, nil
+}
 
-	if lastEventID < 1 {
-		if err := writeSSEWithID(w, "metadata", map[string]any{"thread_id": threadID, "run_id": runID, "stream_mode": append([]string(nil), modes...)}, 1); err != nil {
-			return err
-		}
-		flusher.Flush()
+func writeInitialRunMetadata(lastEventID int, writePart func(string, any) error, threadID, runID string, modes []string) error {
+	if lastEventID >= 1 {
+		return nil
 	}
+	return writePart("metadata", map[string]any{"thread_id": threadID, "run_id": runID, "stream_mode": append([]string(nil), modes...)})
+}
 
+func (s *Server) replayRunEvents(writePart func(string, any) error, threadID, runID string, modes []string) (*runRecord, int, error) {
 	rec, ok := s.getRunRecord(threadID, runID)
 	if !ok {
-		return fmt.Errorf("run not found")
+		return nil, 0, fmt.Errorf("run not found")
 	}
 	if rec.done == nil {
-		return fmt.Errorf("run completion unavailable")
+		return nil, 0, fmt.Errorf("run completion unavailable")
 	}
 	replayedEvents := len(rec.events)
+	if err := s.writeRunEvents(writePart, threadID, runID, modes, rec.events); err != nil {
+		return nil, 0, err
+	}
+	return rec, replayedEvents, nil
+}
 
-	for _, evt := range rec.events {
+func (s *Server) writeRunEvents(writePart func(string, any) error, threadID, runID string, modes []string, events []RunEvent) error {
+	for _, evt := range events {
 		parts := s.streamPartsForRunEvent(threadID, runID, modes, evt)
 		for _, part := range parts {
 			if err := writePart(part.Event, part.Payload); err != nil {
@@ -1649,40 +1910,34 @@ func (s *Server) awaitRunCompletionAndStream(ctx context.Context, w http.Respons
 			}
 		}
 	}
+	return nil
+}
 
+func (s *Server) subscribeRunStream(threadID, runID string, replayedEvents int) (ch chan RunEvent, subID int, closed bool, missed []RunEvent, err error) {
 	s.mu.Lock()
-	runsByThread := s.runs[threadID]
-	original := runsByThread[runID]
+	defer s.mu.Unlock()
+	original := s.runs[threadID][runID]
 	if original == nil {
-		s.mu.Unlock()
-		return fmt.Errorf("run not found")
+		return nil, 0, false, nil, fmt.Errorf("run not found")
 	}
 	if original.closed {
-		missed := make([]RunEvent, 0)
 		if replayedEvents < len(original.events) {
 			missed = append(missed, original.events[replayedEvents:]...)
 		}
-		s.mu.Unlock()
-		for _, evt := range missed {
-			parts := s.streamPartsForRunEvent(threadID, runID, modes, evt)
-			for _, part := range parts {
-				if err := writePart(part.Event, part.Payload); err != nil {
-					return err
-				}
-			}
-		}
-		if err := writePart("end", map[string]any{}); err != nil {
-			return err
-		}
-		return nil
+		return nil, 0, true, missed, nil
 	}
-	subID := original.nextID
+	subID = original.nextID
 	original.nextID++
-	ch := make(chan RunEvent, 16)
+	ch = make(chan RunEvent, 16)
 	original.subs[subID] = ch
-	s.mu.Unlock()
-	defer s.removeSubscriber(threadID, runID, subID)
+	return ch, subID, false, nil, nil
+}
 
+func (s *Server) writeMissedRunEvents(writePart func(string, any) error, threadID, runID string, modes []string, events []RunEvent) error {
+	return s.writeRunEvents(writePart, threadID, runID, modes, events)
+}
+
+func (s *Server) streamSubscribedRunEvents(ctx context.Context, writePart func(string, any) error, threadID, runID string, modes []string, cancelOnDisconnect bool, ch chan RunEvent) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -1692,16 +1947,10 @@ func (s *Server) awaitRunCompletionAndStream(ctx context.Context, w http.Respons
 			return ctx.Err()
 		case evt, ok := <-ch:
 			if !ok {
-				if err := writePart("end", map[string]any{}); err != nil {
-					return err
-				}
-				return nil
+				return writePart("end", map[string]any{})
 			}
-			parts := s.streamPartsForRunEvent(threadID, runID, modes, evt)
-			for _, part := range parts {
-				if err := writePart(part.Event, part.Payload); err != nil {
-					return err
-				}
+			if err := s.writeRunEvents(writePart, threadID, runID, modes, []RunEvent{evt}); err != nil {
+				return err
 			}
 		}
 	}
@@ -1750,8 +1999,8 @@ func (s *Server) streamJoinedRun(w http.ResponseWriter, r *http.Request, threadI
 }
 
 type streamPart struct {
-	Event   string
 	Payload any
+	Event   string
 }
 
 func normalizeStreamModes(raw []string) []string {
@@ -1804,88 +2053,115 @@ func (s *Server) streamPartsForRunEvent(threadID, runID string, modes []string, 
 func (s *Server) streamPartForMode(mode, threadID, runID string, evt RunEvent, rec *runRecord, values map[string]any) (streamPart, bool) {
 	status, _ := evt.Payload["status"].(string)
 	isTerminal := evt.Type == "run.completed" || evt.Type == "run.error" || evt.Type == "run.interrupted" || evt.Type == "run.timeout"
-
 	switch mode {
 	case "values":
-		if !isTerminal {
-			return streamPart{}, false
-		}
-		if len(values) > 0 {
-			return streamPart{Event: "values", Payload: values}, true
-		}
-		return streamPart{Event: "values", Payload: cloneMap(rec.run.Output)}, true
+		return streamValuesPart(isTerminal, values, rec)
 	case "updates":
-		payload := map[string]any{"run_id": runID, "status": status}
-		if output, ok := evt.Payload["output"].(map[string]any); ok {
-			payload["output"] = cloneMap(output)
-		}
-		if errMsg, ok := evt.Payload["error"].(string); ok && errMsg != "" {
-			payload["error"] = errMsg
-		}
-		if isTerminal {
-			payload["values"] = values
-		}
-		return streamPart{Event: "updates", Payload: payload}, true
+		return streamUpdatesPart(runID, status, evt, isTerminal, values), true
 	case "messages":
-		if !isTerminal {
-			return streamPart{}, false
-		}
-		messages, ok := rec.run.Output["messages"]
-		if !ok {
-			return streamPart{}, false
-		}
-		return streamPart{Event: "messages", Payload: messages}, true
+		return streamMessagesPart(isTerminal, rec)
 	case "tasks":
-		name := rec.run.AssistantID
-		if name == "" {
-			name = "run"
-		}
-		payload := map[string]any{"id": runID, "name": name, "event": evt.Type, "status": status}
-		if errMsg, ok := evt.Payload["error"].(string); ok && errMsg != "" {
-			payload["error"] = errMsg
-		}
-		return streamPart{Event: "tasks", Payload: payload}, true
+		return streamTasksPart(runID, status, evt, rec), true
 	case "checkpoints":
-		if !isTerminal {
-			return streamPart{}, false
-		}
-		payload := map[string]any{"thread_id": threadID, "run_id": runID, "values": values}
-		if s.checkpointer != nil {
-			tuple, err := s.checkpointer.GetTuple(context.Background(), &checkpoint.Config{ThreadID: threadID})
-			if err == nil && tuple != nil && tuple.Config != nil {
-				payload["checkpoint_id"] = tuple.Config.CheckpointID
-			}
-		}
-		return streamPart{Event: "checkpoints", Payload: payload}, true
+		return s.streamCheckpointsPart(isTerminal, threadID, runID, values)
 	case "debug":
-		payload := map[string]any{
-			"type":      evt.Type,
-			"thread_id": evt.ThreadID,
-			"run_id":    evt.RunID,
-			"status":    status,
-			"timestamp": evt.Timestamp,
-			"payload":   cloneMap(evt.Payload),
-		}
-		return streamPart{Event: "debug", Payload: payload}, true
+		return streamDebugPart(status, evt), true
 	case "custom":
-		if !isTerminal {
-			return streamPart{}, false
-		}
-		custom, ok := rec.run.Output["custom"]
-		if !ok {
-			return streamPart{}, false
-		}
-		return streamPart{Event: "custom", Payload: custom}, true
+		return streamCustomPart(isTerminal, rec)
 	case "metadata":
-		payload := map[string]any{"thread_id": threadID, "run_id": runID, "event": evt.Type}
-		if status != "" {
-			payload["status"] = status
-		}
-		return streamPart{Event: "metadata", Payload: payload}, true
+		return streamMetadataPart(threadID, runID, status, evt), true
 	default:
-		payload := map[string]any{"thread_id": threadID, "run_id": runID, "event": evt.Type, "payload": cloneMap(evt.Payload)}
-		return streamPart{Event: mode, Payload: payload}, true
+		return streamDefaultPart(mode, threadID, runID, evt), true
 	}
+}
+
+func streamValuesPart(isTerminal bool, values map[string]any, rec *runRecord) (streamPart, bool) {
+	if !isTerminal {
+		return streamPart{}, false
+	}
+	if len(values) > 0 {
+		return streamPart{Event: "values", Payload: values}, true
+	}
+	return streamPart{Event: "values", Payload: cloneMap(rec.run.Output)}, true
+}
+
+func streamUpdatesPart(runID, status string, evt RunEvent, isTerminal bool, values map[string]any) streamPart {
+	payload := map[string]any{"run_id": runID, "status": status}
+	if output, ok := evt.Payload["output"].(map[string]any); ok {
+		payload["output"] = cloneMap(output)
+	}
+	if errMsg, ok := evt.Payload["error"].(string); ok && errMsg != "" {
+		payload["error"] = errMsg
+	}
+	if isTerminal {
+		payload["values"] = values
+	}
+	return streamPart{Event: "updates", Payload: payload}
+}
+
+func streamMessagesPart(isTerminal bool, rec *runRecord) (streamPart, bool) {
+	if !isTerminal {
+		return streamPart{}, false
+	}
+	messages, ok := rec.run.Output["messages"]
+	if !ok {
+		return streamPart{}, false
+	}
+	return streamPart{Event: "messages", Payload: messages}, true
+}
+
+func streamTasksPart(runID, status string, evt RunEvent, rec *runRecord) streamPart {
+	name := rec.run.AssistantID
+	if name == "" {
+		name = "run"
+	}
+	payload := map[string]any{"id": runID, "name": name, "event": evt.Type, "status": status}
+	if errMsg, ok := evt.Payload["error"].(string); ok && errMsg != "" {
+		payload["error"] = errMsg
+	}
+	return streamPart{Event: "tasks", Payload: payload}
+}
+
+func (s *Server) streamCheckpointsPart(isTerminal bool, threadID, runID string, values map[string]any) (streamPart, bool) {
+	if !isTerminal {
+		return streamPart{}, false
+	}
+	payload := map[string]any{"thread_id": threadID, "run_id": runID, "values": values}
+	if s.checkpointer != nil {
+		tuple, err := s.checkpointer.GetTuple(context.Background(), &checkpoint.Config{ThreadID: threadID})
+		if err == nil && tuple != nil && tuple.Config != nil {
+			payload["checkpoint_id"] = tuple.Config.CheckpointID
+		}
+	}
+	return streamPart{Event: "checkpoints", Payload: payload}, true
+}
+
+func streamDebugPart(status string, evt RunEvent) streamPart {
+	return streamPart{Event: "debug", Payload: map[string]any{"type": evt.Type, "thread_id": evt.ThreadID, "run_id": evt.RunID, "status": status, "timestamp": evt.Timestamp, "payload": cloneMap(evt.Payload)}}
+}
+
+func streamCustomPart(isTerminal bool, rec *runRecord) (streamPart, bool) {
+	if !isTerminal {
+		return streamPart{}, false
+	}
+	custom, ok := rec.run.Output["custom"]
+	if !ok {
+		return streamPart{}, false
+	}
+	return streamPart{Event: "custom", Payload: custom}, true
+}
+
+func streamMetadataPart(threadID, runID, status string, evt RunEvent) streamPart {
+	payload := map[string]any{"thread_id": threadID, "run_id": runID, "event": evt.Type}
+	if status != "" {
+		payload["status"] = status
+	}
+	return streamPart{Event: "metadata", Payload: payload}
+}
+
+func streamDefaultPart(mode, threadID, runID string, evt RunEvent) streamPart {
+	payload := map[string]any{"thread_id": threadID, "run_id": runID, "event": evt.Type, "payload": cloneMap(evt.Payload)}
+	return streamPart{Event: mode, Payload: payload}
 }
 
 func (s *Server) cancelRun(threadID, runID string) {
@@ -1897,9 +2173,9 @@ func (s *Server) cancelRun(threadID, runID string) {
 		return
 	}
 	rec.run.Status = RunStatusInterrupted
-	rec.run.Error = "run cancelled"
+	rec.run.Error = "run canceled"
 	rec.run.EndedAt = &ended
-	s.publishEventLocked(rec, RunEvent{Type: "run.interrupted", ThreadID: threadID, RunID: runID, Timestamp: ended, Payload: map[string]any{"error": "run cancelled", "status": string(RunStatusInterrupted)}})
+	s.publishEventLocked(rec, RunEvent{Type: "run.interrupted", ThreadID: threadID, RunID: runID, Timestamp: ended, Payload: map[string]any{"error": "run canceled", "status": string(RunStatusInterrupted)}})
 	s.closeRecordLocked(rec)
 }
 
@@ -1910,80 +2186,110 @@ func (s *Server) handleGlobalStoreItems(w http.ResponseWriter, r *http.Request) 
 	}
 	switch r.Method {
 	case http.MethodPut:
-		var req struct {
-			Namespace []string       `json:"namespace"`
-			Key       string         `json:"key"`
-			Value     map[string]any `json:"value"`
-			Index     any            `json:"index,omitempty"`
-			TTL       *int           `json:"ttl,omitempty"`
+		if err := s.handleGlobalStorePut(w, r); err != nil {
+			s.writeGlobalStoreError(w, err)
 		}
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if len(req.Namespace) == 0 || req.Key == "" {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("namespace and key are required"))
-			return
-		}
-		var ttl *time.Duration
-		if req.TTL != nil && *req.TTL > 0 {
-			d := time.Duration(*req.TTL) * time.Second
-			ttl = &d
-		}
-		if err := s.globalStore.PutItem(r.Context(), req.Namespace, req.Key, cloneMap(req.Value), graphpkg.StorePutOptions{TTL: ttl, Index: req.Index}); err != nil {
-			var invalidUpdate *graphpkg.InvalidUpdateError
-			if errors.As(err, &invalidUpdate) {
-				writeError(w, http.StatusBadRequest, err)
-				return
-			}
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
 	case http.MethodGet:
-		namespace := r.URL.Query().Get("namespace")
-		key := r.URL.Query().Get("key")
-		if namespace == "" || key == "" {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("namespace and key are required"))
-			return
+		if err := s.handleGlobalStoreGet(w, r); err != nil {
+			s.writeGlobalStoreError(w, err)
 		}
-		refreshTTL, err := parseOptionalBoolQueryValue(r.URL.Query().Get("refresh_ttl"))
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		item, err := s.globalStore.GetItem(r.Context(), strings.Split(namespace, "."), key, graphpkg.StoreGetOptions{RefreshTTL: refreshTTL})
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if item == nil {
-			writeError(w, http.StatusNotFound, fmt.Errorf("store item not found"))
-			return
-		}
-		response := serverStoreItemFromGraph(item)
-		writeJSON(w, http.StatusOK, cloneStoreItem(&response))
 	case http.MethodDelete:
-		var req struct {
-			Namespace []string `json:"namespace"`
-			Key       string   `json:"key"`
+		if err := s.handleGlobalStoreDelete(w, r); err != nil {
+			s.writeGlobalStoreError(w, err)
 		}
-		if err := decodeJSON(r, &req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if len(req.Namespace) == 0 || req.Key == "" {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("namespace and key are required"))
-			return
-		}
-		if err := s.globalStore.DeleteItem(r.Context(), req.Namespace, req.Key); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
 	default:
 		writeMethodNotAllowed(w, http.MethodPut, http.MethodGet, http.MethodDelete)
 	}
+}
+
+type globalStoreItemRequest struct {
+	Index     any            `json:"index,omitempty"`
+	Value     map[string]any `json:"value"`
+	TTL       *int           `json:"ttl,omitempty"`
+	Key       string         `json:"key"`
+	Namespace []string       `json:"namespace"`
+}
+
+var errBadGlobalStoreRequest = errors.New("bad global store request")
+var errGlobalStoreItemNotFound = errors.New("global store item not found")
+
+func (s *Server) handleGlobalStorePut(w http.ResponseWriter, r *http.Request) error {
+	var req globalStoreItemRequest
+	if err := decodeJSON(r, &req); err != nil {
+		return fmt.Errorf("%w: %v", errBadGlobalStoreRequest, err)
+	}
+	if len(req.Namespace) == 0 || req.Key == "" {
+		return fmt.Errorf("%w: namespace and key are required", errBadGlobalStoreRequest)
+	}
+	var ttl *time.Duration
+	if req.TTL != nil && *req.TTL > 0 {
+		d := time.Duration(*req.TTL) * time.Second
+		ttl = &d
+	}
+	if err := s.globalStore.PutItem(r.Context(), req.Namespace, req.Key, cloneMap(req.Value), graphpkg.StorePutOptions{TTL: ttl, Index: req.Index}); err != nil {
+		var invalidUpdate *graphpkg.InvalidUpdateError
+		if errors.As(err, &invalidUpdate) {
+			return fmt.Errorf("%w: %v", errBadGlobalStoreRequest, err)
+		}
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (s *Server) handleGlobalStoreGet(w http.ResponseWriter, r *http.Request) error {
+	namespace := r.URL.Query().Get("namespace")
+	key := r.URL.Query().Get("key")
+	if namespace == "" || key == "" {
+		return fmt.Errorf("%w: namespace and key are required", errBadGlobalStoreRequest)
+	}
+	refreshTTL, err := parseOptionalBoolQueryValue(r.URL.Query().Get("refresh_ttl"))
+	if err != nil {
+		return fmt.Errorf("%w: %v", errBadGlobalStoreRequest, err)
+	}
+	item, err := s.globalStore.GetItem(r.Context(), strings.Split(namespace, "."), key, graphpkg.StoreGetOptions{RefreshTTL: refreshTTL})
+	if err != nil {
+		return err
+	}
+	if item == nil {
+		return errGlobalStoreItemNotFound
+	}
+	response := serverStoreItemFromGraph(item)
+	writeJSON(w, http.StatusOK, cloneStoreItem(&response))
+	return nil
+}
+
+func (s *Server) handleGlobalStoreDelete(w http.ResponseWriter, r *http.Request) error {
+	var req struct {
+		Key       string   `json:"key"`
+		Namespace []string `json:"namespace"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		return fmt.Errorf("%w: %v", errBadGlobalStoreRequest, err)
+	}
+	if len(req.Namespace) == 0 || req.Key == "" {
+		return fmt.Errorf("%w: namespace and key are required", errBadGlobalStoreRequest)
+	}
+	if err := s.globalStore.DeleteItem(r.Context(), req.Namespace, req.Key); err != nil {
+		return err
+	}
+	w.WriteHeader(http.StatusNoContent)
+	return nil
+}
+
+func (s *Server) writeGlobalStoreError(w http.ResponseWriter, err error) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, errBadGlobalStoreRequest) {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if errors.Is(err, errGlobalStoreItemNotFound) {
+		writeError(w, http.StatusNotFound, fmt.Errorf("store item not found"))
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err)
 }
 
 func (s *Server) handleGlobalStoreSearch(w http.ResponseWriter, r *http.Request) {
@@ -1992,12 +2298,12 @@ func (s *Server) handleGlobalStoreSearch(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
+		Filter          map[string]any `json:"filter,omitempty"`
+		RefreshTTL      *bool          `json:"refresh_ttl,omitempty"`
+		Query           string         `json:"query,omitempty"`
 		NamespacePrefix []string       `json:"namespace_prefix"`
 		Limit           int            `json:"limit,omitempty"`
 		Offset          int            `json:"offset,omitempty"`
-		Filter          map[string]any `json:"filter,omitempty"`
-		Query           string         `json:"query,omitempty"`
-		RefreshTTL      *bool          `json:"refresh_ttl,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -2030,9 +2336,9 @@ func (s *Server) handleGlobalStoreNamespaces(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var req struct {
+		MaxDepth *int     `json:"max_depth,omitempty"`
 		Prefix   []string `json:"prefix,omitempty"`
 		Suffix   []string `json:"suffix,omitempty"`
-		MaxDepth *int     `json:"max_depth,omitempty"`
 		Limit    int      `json:"limit,omitempty"`
 		Offset   int      `json:"offset,omitempty"`
 	}
@@ -2108,11 +2414,11 @@ func (s *Server) handleThreadCrons(w http.ResponseWriter, r *http.Request, threa
 
 func (s *Server) createCron(w http.ResponseWriter, r *http.Request, threadID string) {
 	var req struct {
-		AssistantID string         `json:"assistant_id,omitempty"`
-		Schedule    string         `json:"schedule,omitempty"`
 		Input       map[string]any `json:"input,omitempty"`
 		Enabled     *bool          `json:"enabled,omitempty"`
 		EndTime     *time.Time     `json:"end_time,omitempty"`
+		AssistantID string         `json:"assistant_id,omitempty"`
+		Schedule    string         `json:"schedule,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -2143,11 +2449,11 @@ func (s *Server) createCron(w http.ResponseWriter, r *http.Request, threadID str
 
 func (s *Server) updateCron(w http.ResponseWriter, r *http.Request, cronID string) {
 	var req struct {
-		AssistantID string         `json:"assistant_id,omitempty"`
-		Schedule    string         `json:"schedule,omitempty"`
 		Input       map[string]any `json:"input,omitempty"`
 		Enabled     *bool          `json:"enabled,omitempty"`
 		EndTime     *time.Time     `json:"end_time,omitempty"`
+		AssistantID string         `json:"assistant_id,omitempty"`
+		Schedule    string         `json:"schedule,omitempty"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -2201,9 +2507,9 @@ func (s *Server) searchCrons(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
+		Enabled     *bool  `json:"enabled,omitempty"`
 		AssistantID string `json:"assistant_id,omitempty"`
 		ThreadID    string `json:"thread_id,omitempty"`
-		Enabled     *bool  `json:"enabled,omitempty"`
 		Limit       int    `json:"limit,omitempty"`
 		Offset      int    `json:"offset,omitempty"`
 	}
@@ -2646,12 +2952,12 @@ func writeSSEWithID(w http.ResponseWriter, event string, payload any, id int) er
 		if evt.Type == "" {
 			evt.Type = event
 		}
-		if _, err := fmt.Fprintf(w, "id: %d\n", id); err != nil {
+		if _, err := w.Write([]byte("id: " + strconv.Itoa(id) + "\n")); err != nil {
 			return err
 		}
 		return writeSSE(w, evt)
 	}
-	if _, err := fmt.Fprintf(w, "id: %d\n", id); err != nil {
+	if _, err := w.Write([]byte("id: " + strconv.Itoa(id) + "\n")); err != nil {
 		return err
 	}
 	return writeSSEMode(w, event, payload)

@@ -97,7 +97,7 @@ func TestRunsClientRunOptionsAreSerialized(t *testing.T) {
 	}
 }
 
-func assertRunOptionsInBody(t *testing.T, body map[string]any, expectedCheckpoint map[string]any) {
+func assertRunOptionsInBody(t *testing.T, body, expectedCheckpoint map[string]any) {
 	t.Helper()
 
 	if body["assistant_id"] != "a1" {

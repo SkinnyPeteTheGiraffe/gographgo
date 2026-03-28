@@ -15,12 +15,12 @@ import (
 )
 
 type scriptedModel struct {
-	mu                 sync.Mutex
 	responses          []prebuilt.ModelResponse
 	structuredResponse any
+	inputs             [][]prebuilt.Message
+	mu                 sync.Mutex
 	structuredCalls    int
 	idx                int
-	inputs             [][]prebuilt.Message
 }
 
 func (m *scriptedModel) Generate(_ context.Context, messages []prebuilt.Message) (prebuilt.ModelResponse, error) {
@@ -90,8 +90,8 @@ func (m *selectorModel) Generate(_ context.Context, _ []prebuilt.Message) (prebu
 
 type boundModel struct {
 	responses []prebuilt.ModelResponse
-	idx       int
 	bound     []string
+	idx       int
 }
 
 func (m *boundModel) Generate(_ context.Context, _ []prebuilt.Message) (prebuilt.ModelResponse, error) {
@@ -111,18 +111,18 @@ func (m *boundModel) BoundToolNames() []string {
 
 type testStore struct{}
 
-func (testStore) Get(_ []string, _ string) (any, bool, error) { return nil, false, nil }
-func (testStore) Set(_ []string, _ string, _ any) error       { return nil }
-func (testStore) Delete(_ []string, _ string) error           { return nil }
-func (testStore) List(_ []string, _ string) ([]string, error) { return nil, nil }
+func (testStore) Get(_ []string, _ string) (value any, ok bool, err error) { return nil, false, nil }
+func (testStore) Set(_ []string, _ string, _ any) error                    { return nil }
+func (testStore) Delete(_ []string, _ string) error                        { return nil }
+func (testStore) List(_ []string, _ string) ([]string, error)              { return nil, nil }
 func (testStore) Search(_ []string, _ string, _ int) ([]string, error) {
 	return nil, nil
 }
 
 type customState struct {
+	Structured any
 	History    []prebuilt.Message
 	Steps      int
-	Structured any
 }
 
 type customStateSchema struct{}
@@ -473,8 +473,8 @@ func TestReactAgent_V2ExecutesToolCallsConcurrentlyWithStableOutputOrder(t *test
 	testCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	type invokeResult struct {
-		result prebuilt.AgentResult
 		err    error
+		result prebuilt.AgentResult
 	}
 	resultCh := make(chan invokeResult, 1)
 	go func() {
@@ -1114,6 +1114,52 @@ func TestReactAgent_InterruptBeforeAndAfterNodes(t *testing.T) {
 	}
 	if afterResult.Pending == nil || afterResult.Pending.Stage != prebuilt.PendingStageAfterTools {
 		t.Fatalf("after pending stage = %#v", afterResult.Pending)
+	}
+}
+
+func TestReactAgent_ResumeAfterAgentInterruptReentersBeforeTools(t *testing.T) {
+	model := &scriptedModel{responses: []prebuilt.ModelResponse{{
+		Content: "call tool",
+		ToolCalls: []prebuilt.ToolCall{{
+			ID:   "1",
+			Name: "echo",
+			Args: map[string]any{"text": "hi"},
+		}},
+	}}}
+
+	executed := 0
+	agent := prebuilt.CreateReactAgent(
+		model,
+		[]prebuilt.Tool{prebuilt.NewToolFunc("echo", func(_ context.Context, args map[string]any) (any, error) {
+			executed++
+			return args["text"], nil
+		})},
+		prebuilt.WithAgentInterruptAfter([]string{"agent"}, prebuilt.HumanInterruptConfig{AllowAccept: true}, "after-agent"),
+		prebuilt.WithInterruptBeforeTools(prebuilt.HumanInterruptConfig{AllowRespond: true}, "before-tools"),
+	)
+
+	first, err := agent.Invoke(context.Background(), prebuilt.AgentState{Messages: []prebuilt.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	if first.Pending == nil || first.Pending.Stage != prebuilt.PendingStageAfterAgent {
+		t.Fatalf("first pending = %#v, want after_agent", first.Pending)
+	}
+
+	second, err := agent.Resume(context.Background(), first.Pending, map[string]prebuilt.HumanResponse{
+		"1": prebuilt.RespondHumanResponse("manual"),
+	})
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if executed != 0 {
+		t.Fatalf("tool executions = %d, want 0 before before-tools interrupt", executed)
+	}
+	if second.Pending == nil || second.Pending.Stage != prebuilt.PendingStageBeforeTools {
+		t.Fatalf("second pending = %#v, want before_tools", second.Pending)
+	}
+	if len(second.Pending.Calls) != 1 || second.Pending.Calls[0].ID != "1" {
+		t.Fatalf("pending calls = %#v, want original call", second.Pending.Calls)
 	}
 }
 

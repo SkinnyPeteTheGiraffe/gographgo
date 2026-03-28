@@ -71,7 +71,7 @@ func main() {
 	ctx := graph.WithConfig(context.Background(), cfg)
 
 	// --- First invocation: graph halts at the interrupt ---
-	initial := State{Question: "What is your favourite language?"}
+	initial := State{Question: "What is your favorite language?"}
 	first, err := compiled.Invoke(ctx, initial)
 	if err != nil {
 		log.Fatalf("first invoke: %v", err)

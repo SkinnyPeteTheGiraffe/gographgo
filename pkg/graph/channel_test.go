@@ -66,8 +66,8 @@ func TestLastValue_MultipleWritesError(t *testing.T) {
 
 func TestLastValue_Overwrite(t *testing.T) {
 	c := NewLastValue()
-	c.Update(d("first"))  //nolint:errcheck
-	c.Update(d("second")) //nolint:errcheck
+	c.Update(d("first"))  //nolint:errcheck // test setup intentionally ignores update error
+	c.Update(d("second")) //nolint:errcheck // test setup intentionally ignores update error
 	v, _ := c.Get()
 	if v.Value() != "second" {
 		t.Fatalf("want 'second', got %v", v)
@@ -76,7 +76,7 @@ func TestLastValue_Overwrite(t *testing.T) {
 
 func TestLastValue_CheckpointRestore(t *testing.T) {
 	c := NewLastValue()
-	c.Update(d("hello")) //nolint:errcheck
+	c.Update(d("hello")) //nolint:errcheck // test setup intentionally ignores update error
 
 	snap, ok := c.Checkpoint()
 	if !ok || snap.Value() != "hello" {
@@ -103,10 +103,10 @@ func TestLastValue_CheckpointEmpty(t *testing.T) {
 
 func TestLastValue_Copy(t *testing.T) {
 	c := NewLastValue()
-	c.Update(d(99)) //nolint:errcheck
+	c.Update(d(99)) //nolint:errcheck // test setup intentionally ignores update error
 	c2 := c.Copy()
 	// Mutating original doesn't affect copy.
-	c.Update(d(100)) //nolint:errcheck
+	c.Update(d(100)) //nolint:errcheck // test setup intentionally ignores update error
 	v, _ := c2.Get()
 	if v.Value() != 99 {
 		t.Fatalf("copy should be independent, got %v", v)
@@ -146,7 +146,7 @@ func TestLastValueAfterFinish_RequiresFinish(t *testing.T) {
 
 func TestLastValueAfterFinish_ConsumeAndCheckpoint(t *testing.T) {
 	c := NewLastValueAfterFinish()
-	c.Update(d(123)) //nolint:errcheck
+	c.Update(d(123)) //nolint:errcheck // test setup intentionally ignores update error
 	c.Finish()
 
 	snap, ok := c.Checkpoint()
@@ -203,7 +203,7 @@ func TestAnyValue_MultipleWritesTakesLast(t *testing.T) {
 
 func TestAnyValue_EmptyUpdateClearsValue(t *testing.T) {
 	c := NewAnyValue()
-	c.Update(d("set")) //nolint:errcheck
+	c.Update(d("set")) //nolint:errcheck // test setup intentionally ignores update error
 
 	changed, err := c.Update(nil)
 	if err != nil || !changed {
@@ -224,7 +224,7 @@ func TestAnyValue_EmptyUpdateOnEmptyNoOp(t *testing.T) {
 
 func TestAnyValue_CheckpointRestore(t *testing.T) {
 	c := NewAnyValue()
-	c.Update(d(7)) //nolint:errcheck
+	c.Update(d(7)) //nolint:errcheck // test setup intentionally ignores update error
 
 	snap, ok := c.Checkpoint()
 	if !ok || snap.Value() != 7 {
@@ -244,7 +244,7 @@ func TestBinOp_Accumulate(t *testing.T) {
 	add := func(a, b any) any { return a.(int) + b.(int) }
 	c := NewBinaryOperatorAggregate(add)
 
-	c.Update(d(1, 2, 3)) //nolint:errcheck
+	c.Update(d(1, 2, 3)) //nolint:errcheck // test setup intentionally ignores update error
 	v, _ := c.Get()
 	if v.Value() != 6 {
 		t.Fatalf("want 6, got %v", v)
@@ -254,7 +254,7 @@ func TestBinOp_Accumulate(t *testing.T) {
 func TestBinOp_EmptyUpdateNoOp(t *testing.T) {
 	add := func(a, b any) any { return a.(int) + b.(int) }
 	c := NewBinaryOperatorAggregate(add)
-	c.Update(d(5)) //nolint:errcheck
+	c.Update(d(5)) //nolint:errcheck // test setup intentionally ignores update error
 
 	changed, err := c.Update(nil)
 	if err != nil || changed {
@@ -269,7 +269,7 @@ func TestBinOp_EmptyUpdateNoOp(t *testing.T) {
 func TestBinOp_Overwrite(t *testing.T) {
 	add := func(a, b any) any { return a.(int) + b.(int) }
 	c := NewBinaryOperatorAggregate(add)
-	c.Update(d(10)) //nolint:errcheck
+	c.Update(d(10)) //nolint:errcheck // test setup intentionally ignores update error
 
 	_, err := c.Update(d(Overwrite{Value: 99}))
 	if err != nil {
@@ -284,7 +284,7 @@ func TestBinOp_Overwrite(t *testing.T) {
 func TestBinOp_OverwriteSuppressesLaterWritesInStep(t *testing.T) {
 	add := func(a, b any) any { return a.(int) + b.(int) }
 	c := NewBinaryOperatorAggregate(add)
-	c.Update(d(10)) //nolint:errcheck
+	c.Update(d(10)) //nolint:errcheck // test setup intentionally ignores update error
 
 	_, err := c.Update(d(Overwrite{Value: 7}, 3, 4))
 	if err != nil {
@@ -308,7 +308,7 @@ func TestBinOp_DoubleOverwriteErrors(t *testing.T) {
 func TestBinOp_DictOverwrite(t *testing.T) {
 	add := func(a, b any) any { return a.(int) + b.(int) }
 	c := NewBinaryOperatorAggregate(add)
-	c.Update(d(10)) //nolint:errcheck
+	c.Update(d(10)) //nolint:errcheck // test setup intentionally ignores update error
 
 	_, err := c.Update(d(map[string]any{"__overwrite__": 7}))
 	if err != nil {
@@ -323,7 +323,7 @@ func TestBinOp_DictOverwrite(t *testing.T) {
 func TestBinOp_DictOverwriteLegacyKeyStillSupported(t *testing.T) {
 	add := func(a, b any) any { return a.(int) + b.(int) }
 	c := NewBinaryOperatorAggregate(add)
-	c.Update(d(10)) //nolint:errcheck
+	c.Update(d(10)) //nolint:errcheck // test setup intentionally ignores update error
 
 	_, err := c.Update(d(map[string]any{"__OVERWRITE__": 6}))
 	if err != nil {
@@ -363,7 +363,7 @@ func TestBinOp_WithTypeInitializesZeroValue(t *testing.T) {
 		t.Fatalf("expected empty []int zero value, got %#v", initial)
 	}
 
-	c.Update(d([]int{1, 2})) //nolint:errcheck
+	c.Update(d([]int{1, 2})) //nolint:errcheck // test setup intentionally ignores update error
 	v, _ = c.Get()
 	if !reflect.DeepEqual(v.Value(), []int{1, 2}) {
 		t.Fatalf("expected accumulated []int{1,2}, got %#v", v.Value())
@@ -373,7 +373,7 @@ func TestBinOp_WithTypeInitializesZeroValue(t *testing.T) {
 func TestBinOp_CheckpointRestore(t *testing.T) {
 	add := func(a, b any) any { return a.(int) + b.(int) }
 	c := NewBinaryOperatorAggregate(add)
-	c.Update(d(3, 4)) //nolint:errcheck
+	c.Update(d(3, 4)) //nolint:errcheck // test setup intentionally ignores update error
 
 	snap, ok := c.Checkpoint()
 	if !ok || snap.Value() != 7 {
@@ -381,7 +381,7 @@ func TestBinOp_CheckpointRestore(t *testing.T) {
 	}
 
 	c2, _ := c.FromCheckpoint(snap)
-	c2.Update(d(1)) //nolint:errcheck
+	c2.Update(d(1)) //nolint:errcheck // test setup intentionally ignores update error
 	v, _ := c2.Get()
 	if v.Value() != 8 {
 		t.Fatalf("restored + 1: want 8, got %v", v)
@@ -392,7 +392,7 @@ func TestBinOp_CheckpointRestore(t *testing.T) {
 
 func TestTopic_BasicAccumulate(t *testing.T) {
 	c := NewTopic(false)
-	c.Update(d("a", "b")) //nolint:errcheck
+	c.Update(d("a", "b")) //nolint:errcheck // test setup intentionally ignores update error
 	v, err := c.Get()
 	if err != nil {
 		t.Fatalf("Get error: %v", err)
@@ -409,8 +409,8 @@ func TestTopic_BasicAccumulate(t *testing.T) {
 
 func TestTopic_ClearsOnNextUpdate(t *testing.T) {
 	c := NewTopic(false)
-	c.Update(d("a"))      //nolint:errcheck
-	c.Update(d("b", "c")) //nolint:errcheck
+	c.Update(d("a"))      //nolint:errcheck // test setup intentionally ignores update error
+	c.Update(d("b", "c")) //nolint:errcheck // test setup intentionally ignores update error
 	v, _ := c.Get()
 	dynItems := mustDynamicSlice(t, v)
 	items := make([]any, len(dynItems))
@@ -424,7 +424,7 @@ func TestTopic_ClearsOnNextUpdate(t *testing.T) {
 
 func TestTopic_ConsumeNoOp(t *testing.T) {
 	c := NewTopic(false)
-	c.Update(d("a", "b")) //nolint:errcheck
+	c.Update(d("a", "b")) //nolint:errcheck // test setup intentionally ignores update error
 	if c.Consume() {
 		t.Fatal("Consume should be a no-op")
 	}
@@ -440,8 +440,8 @@ func TestTopic_ConsumeNoOp(t *testing.T) {
 
 func TestTopic_AccumulateMode(t *testing.T) {
 	c := NewTopic(true)
-	c.Update(d("a")) //nolint:errcheck
-	c.Update(d("b")) //nolint:errcheck
+	c.Update(d("a")) //nolint:errcheck // test setup intentionally ignores update error
+	c.Update(d("b")) //nolint:errcheck // test setup intentionally ignores update error
 	v, _ := c.Get()
 	dynItems := mustDynamicSlice(t, v)
 	items := make([]any, len(dynItems))
@@ -455,7 +455,7 @@ func TestTopic_AccumulateMode(t *testing.T) {
 
 func TestTopic_FlattenSlice(t *testing.T) {
 	c := NewTopic(false)
-	c.Update(d([]Dynamic{Dyn("x"), Dyn("y")}, "z")) //nolint:errcheck
+	c.Update(d([]Dynamic{Dyn("x"), Dyn("y")}, "z")) //nolint:errcheck // test setup intentionally ignores update error
 	v, _ := c.Get()
 	dynItems := mustDynamicSlice(t, v)
 	items := make([]any, len(dynItems))
@@ -476,7 +476,7 @@ func TestTopic_EmptyRaisesError(t *testing.T) {
 
 func TestTopic_CheckpointRestore(t *testing.T) {
 	c := NewTopic(false)
-	c.Update(d("p", "q")) //nolint:errcheck
+	c.Update(d("p", "q")) //nolint:errcheck // test setup intentionally ignores update error
 	snap, ok := c.Checkpoint()
 	if !ok {
 		t.Fatal("expected checkpoint data")
@@ -519,7 +519,7 @@ func TestTopic_CheckpointLegacyTupleRestore(t *testing.T) {
 
 func TestEphemeral_BasicRoundTrip(t *testing.T) {
 	c := NewEphemeralValue(true)
-	c.Update(d("eph")) //nolint:errcheck
+	c.Update(d("eph")) //nolint:errcheck // test setup intentionally ignores update error
 	v, _ := c.Get()
 	if v.Value() != "eph" {
 		t.Fatalf("want 'eph', got %v", v)
@@ -528,7 +528,7 @@ func TestEphemeral_BasicRoundTrip(t *testing.T) {
 
 func TestEphemeral_EmptyUpdateClears(t *testing.T) {
 	c := NewEphemeralValue(true)
-	c.Update(d("x")) //nolint:errcheck
+	c.Update(d("x")) //nolint:errcheck // test setup intentionally ignores update error
 
 	changed, _ := c.Update(nil)
 	if !changed || c.IsAvailable() {
@@ -558,7 +558,7 @@ func TestEphemeral_GuardOff(t *testing.T) {
 
 func TestEphemeral_CheckpointRestore(t *testing.T) {
 	c := NewEphemeralValue(true)
-	c.Update(d("snap")) //nolint:errcheck
+	c.Update(d("snap")) //nolint:errcheck // test setup intentionally ignores update error
 	snap, ok := c.Checkpoint()
 	if !ok {
 		t.Fatal("expected checkpoint data")
@@ -578,12 +578,12 @@ func TestBarrier_NotAvailableUntilAllSeen(t *testing.T) {
 		t.Fatal("should not be available initially")
 	}
 
-	c.Update(d("a", "b")) //nolint:errcheck
+	c.Update(d("a", "b")) //nolint:errcheck // test setup intentionally ignores update error
 	if c.IsAvailable() {
 		t.Fatal("should not be available with only 2 of 3")
 	}
 
-	c.Update(d("c")) //nolint:errcheck
+	c.Update(d("c")) //nolint:errcheck // test setup intentionally ignores update error
 	if !c.IsAvailable() {
 		t.Fatal("should be available after all 3 seen")
 	}
@@ -596,7 +596,7 @@ func TestBarrier_NotAvailableUntilAllSeen(t *testing.T) {
 
 func TestBarrier_ConsumeResets(t *testing.T) {
 	c := NewNamedBarrierValue([]string{"x"})
-	c.Update(d("x")) //nolint:errcheck
+	c.Update(d("x")) //nolint:errcheck // test setup intentionally ignores update error
 	if !c.Consume() {
 		t.Fatal("Consume should return true when barrier satisfied")
 	}
@@ -615,14 +615,14 @@ func TestBarrier_UnknownSourceErrors(t *testing.T) {
 
 func TestBarrier_CheckpointRestore(t *testing.T) {
 	c := NewNamedBarrierValue([]string{"a", "b"})
-	c.Update(d("a")) //nolint:errcheck
+	c.Update(d("a")) //nolint:errcheck // test setup intentionally ignores update error
 	snap, ok := c.Checkpoint()
 	if !ok {
 		t.Fatal("expected checkpoint data")
 	}
 	c2, _ := c.FromCheckpoint(snap)
 	// "a" is already seen in c2; adding "b" should satisfy it.
-	c2.Update(d("b")) //nolint:errcheck
+	c2.Update(d("b")) //nolint:errcheck // test setup intentionally ignores update error
 	if !c2.IsAvailable() {
 		t.Fatal("barrier should be satisfied after restore + 'b'")
 	}
@@ -631,12 +631,12 @@ func TestBarrier_CheckpointRestore(t *testing.T) {
 func TestBarrier_AllowsNonStringComparableValues(t *testing.T) {
 	c := NewNamedBarrierValue([]int{1, 2})
 
-	c.Update(d(1)) //nolint:errcheck
+	c.Update(d(1)) //nolint:errcheck // test setup intentionally ignores update error
 	if c.IsAvailable() {
 		t.Fatal("should not be available with only one value")
 	}
 
-	c.Update(d(2)) //nolint:errcheck
+	c.Update(d(2)) //nolint:errcheck // test setup intentionally ignores update error
 	if !c.IsAvailable() {
 		t.Fatal("should be available after all expected int values are seen")
 	}
@@ -654,7 +654,7 @@ func TestBarrier_UnexpectedTypeErrors(t *testing.T) {
 
 func TestBarrierAfterFinish_RequiresFinish(t *testing.T) {
 	c := NewNamedBarrierValueAfterFinish([]string{"a"})
-	c.Update(d("a")) //nolint:errcheck
+	c.Update(d("a")) //nolint:errcheck // test setup intentionally ignores update error
 	if c.IsAvailable() {
 		t.Fatal("should not be available before Finish()")
 	}
@@ -668,7 +668,7 @@ func TestBarrierAfterFinish_RequiresFinish(t *testing.T) {
 
 func TestBarrierAfterFinish_ConsumeResets(t *testing.T) {
 	c := NewNamedBarrierValueAfterFinish([]string{"a"})
-	c.Update(d("a")) //nolint:errcheck
+	c.Update(d("a")) //nolint:errcheck // test setup intentionally ignores update error
 	c.Finish()
 	if !c.Consume() {
 		t.Fatal("Consume should return true")
@@ -680,7 +680,7 @@ func TestBarrierAfterFinish_ConsumeResets(t *testing.T) {
 
 func TestBarrierAfterFinish_AllowsNonStringComparableValues(t *testing.T) {
 	c := NewNamedBarrierValueAfterFinish([]int{1})
-	c.Update(d(1)) //nolint:errcheck
+	c.Update(d(1)) //nolint:errcheck // test setup intentionally ignores update error
 	if c.IsAvailable() {
 		t.Fatal("should not be available before Finish()")
 	}
@@ -696,7 +696,7 @@ func TestBarrierAfterFinish_AllowsNonStringComparableValues(t *testing.T) {
 
 func TestUntracked_BasicRoundTrip(t *testing.T) {
 	c := NewUntrackedValue(true)
-	c.Update(d("u")) //nolint:errcheck
+	c.Update(d("u")) //nolint:errcheck // test setup intentionally ignores update error
 	v, _ := c.Get()
 	if v.Value() != "u" {
 		t.Fatalf("want 'u', got %v", v)
@@ -705,7 +705,7 @@ func TestUntracked_BasicRoundTrip(t *testing.T) {
 
 func TestUntracked_NeverCheckpointed(t *testing.T) {
 	c := NewUntrackedValue(true)
-	c.Update(d("val")) //nolint:errcheck
+	c.Update(d("val")) //nolint:errcheck // test setup intentionally ignores update error
 	_, ok := c.Checkpoint()
 	if ok {
 		t.Fatal("UntrackedValue should never checkpoint")
@@ -714,7 +714,7 @@ func TestUntracked_NeverCheckpointed(t *testing.T) {
 
 func TestUntracked_FromCheckpointReturnsEmpty(t *testing.T) {
 	c := NewUntrackedValue(true)
-	c.Update(d("val")) //nolint:errcheck
+	c.Update(d("val")) //nolint:errcheck // test setup intentionally ignores update error
 	c2, _ := c.FromCheckpoint(Dyn("anything"))
 	if c2.IsAvailable() {
 		t.Fatal("restored UntrackedValue should be empty")
@@ -744,12 +744,12 @@ func TestChannelTypeMetadata(t *testing.T) {
 func TestChannelsEqual(t *testing.T) {
 	a := NewTopic(true)
 	b := NewTopic(true)
-	a.Update(d("x")) //nolint:errcheck
-	b.Update(d("x")) //nolint:errcheck
+	a.Update(d("x")) //nolint:errcheck // test setup intentionally ignores update error
+	b.Update(d("x")) //nolint:errcheck // test setup intentionally ignores update error
 	if !ChannelsEqual(a, b) {
 		t.Fatal("expected equal channels with same configuration and values")
 	}
-	b.Update(d("y")) //nolint:errcheck
+	b.Update(d("y")) //nolint:errcheck // test setup intentionally ignores update error
 	if ChannelsEqual(a, b) {
 		t.Fatal("expected unequal channels after state diverges")
 	}

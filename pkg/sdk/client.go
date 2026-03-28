@@ -52,10 +52,10 @@ type StoreClient struct {
 
 // Config configures the SDK client.
 type Config struct {
-	BaseURL    string
 	HTTPClient *http.Client
-	APIKey     string
 	Headers    map[string]string
+	BaseURL    string
+	APIKey     string
 }
 
 // New creates a new SDK client.
@@ -168,7 +168,7 @@ func isTerminalRunStatus(status RunStatus) bool {
 }
 
 // StreamRunEvents streams server-sent run events.
-func (c *Client) StreamRunEvents(ctx context.Context, threadID, runID string) (<-chan RunEvent, <-chan error) {
+func (c *Client) StreamRunEvents(ctx context.Context, threadID, runID string) (events <-chan RunEvent, errs <-chan error) {
 	return c.Runs.Events(ctx, threadID, runID)
 }
 
@@ -177,7 +177,8 @@ func (c *Client) StreamRunWithOptions(
 	ctx context.Context,
 	threadID string,
 	req RunStreamRequest,
-) (<-chan StreamPart, <-chan error) {
+) (parts <-chan StreamPart, errs <-chan error) {
+
 	return c.Runs.Stream(ctx, threadID, req)
 }
 
@@ -186,7 +187,8 @@ func (c *Client) StreamRunWithOptionsTyped(
 	ctx context.Context,
 	threadID string,
 	req RunStreamRequest,
-) (<-chan StreamPartV2, <-chan error) {
+) (parts <-chan StreamPartV2, errs <-chan error) {
+
 	return c.Runs.StreamTyped(ctx, threadID, req)
 }
 

@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,10 +15,10 @@ func TestDecodeStreamPartV2Modes(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
+		wantMatch any
 		name      string
 		event     string
 		data      string
-		wantMatch any
 	}{
 		{name: "values", event: "values|root", data: `{"count":1}`, wantMatch: ValuesStreamPart{}},
 		{name: "updates", event: "updates|node1", data: `{"node1":{"done":true}}`, wantMatch: UpdatesStreamPart{}},
@@ -328,4 +329,134 @@ func TestStreamMethodsReconnectOnLocationEOF(t *testing.T) {
 	if calls.Load() != 2 {
 		t.Fatalf("request count = %d, want 2", calls.Load())
 	}
+}
+
+func TestShouldStopSSELoop(t *testing.T) {
+	t.Parallel()
+
+	scanErr := errors.New("scan failed")
+
+	tests := []struct {
+		ctx               context.Context
+		scanErr           error
+		reconnectPath     string
+		name              string
+		reconnectAttempts int
+		ok                bool
+		sawEnd            bool
+		wantStop          bool
+		wantErr           bool
+	}{
+		{
+			name:     "stop when consume reports not ok",
+			ctx:      context.Background(),
+			ok:       false,
+			wantStop: true,
+		},
+		{
+			name:     "stop when context canceled",
+			ctx:      canceledContext(),
+			ok:       true,
+			wantStop: true,
+		},
+		{
+			name:          "stop cleanly on end event",
+			ctx:           context.Background(),
+			ok:            true,
+			sawEnd:        true,
+			scanErr:       nil,
+			reconnectPath: "/v1/runs/stream/reconnect",
+			wantStop:      true,
+		},
+		{
+			name:          "stop cleanly without reconnect location",
+			ctx:           context.Background(),
+			ok:            true,
+			sawEnd:        false,
+			scanErr:       nil,
+			reconnectPath: "",
+			wantStop:      true,
+		},
+		{
+			name:              "continue reconnect on clean EOF when attempts remain",
+			ctx:               context.Background(),
+			ok:                true,
+			sawEnd:            false,
+			scanErr:           nil,
+			reconnectPath:     "/v1/runs/stream/reconnect",
+			reconnectAttempts: maxSSEReconnectAttempts - 1,
+			wantStop:          false,
+		},
+		{
+			name:              "stop reconnect on clean EOF when attempts exhausted",
+			ctx:               context.Background(),
+			ok:                true,
+			sawEnd:            false,
+			scanErr:           nil,
+			reconnectPath:     "/v1/runs/stream/reconnect",
+			reconnectAttempts: maxSSEReconnectAttempts,
+			wantStop:          true,
+		},
+		{
+			name:              "continue retry when scan fails and reconnect available",
+			ctx:               context.Background(),
+			ok:                true,
+			scanErr:           scanErr,
+			reconnectPath:     "/v1/runs/stream/reconnect",
+			reconnectAttempts: maxSSEReconnectAttempts - 1,
+			wantStop:          false,
+		},
+		{
+			name:          "emit scan error when reconnect missing",
+			ctx:           context.Background(),
+			ok:            true,
+			scanErr:       scanErr,
+			reconnectPath: "",
+			wantStop:      true,
+			wantErr:       true,
+		},
+		{
+			name:              "emit scan error when reconnect attempts exhausted",
+			ctx:               context.Background(),
+			ok:                true,
+			scanErr:           scanErr,
+			reconnectPath:     "/v1/runs/stream/reconnect",
+			reconnectAttempts: maxSSEReconnectAttempts,
+			wantStop:          true,
+			wantErr:           true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			errs := make(chan error, 1)
+			gotStop := shouldStopSSELoop(tt.ctx, tt.ok, tt.sawEnd, tt.scanErr, tt.reconnectPath, tt.reconnectAttempts, errs)
+			if gotStop != tt.wantStop {
+				t.Fatalf("shouldStopSSELoop() = %v, want %v", gotStop, tt.wantStop)
+			}
+
+			select {
+			case err := <-errs:
+				if !tt.wantErr {
+					t.Fatalf("unexpected error sent: %v", err)
+				}
+				if !errors.Is(err, scanErr) {
+					t.Fatalf("error sent = %v, want %v", err, scanErr)
+				}
+			default:
+				if tt.wantErr {
+					t.Fatal("expected error to be sent")
+				}
+			}
+		})
+	}
+}
+
+func canceledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
 }

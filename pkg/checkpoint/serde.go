@@ -6,6 +6,12 @@ import (
 	"fmt"
 )
 
+const (
+	serializedTypeNull  = "null"
+	serializedTypeBytes = "bytes"
+	serializedTypeJSON  = "json"
+)
+
 // Serializer defines how checkpoint values are encoded for storage and decoded
 // when read back.
 //
@@ -31,7 +37,7 @@ type SerializedValue struct {
 
 // IdentitySerializer stores values as-is without transformation.
 //
-// This preserves existing behaviour for in-memory checkpoints while still
+// This preserves existing behavior for in-memory checkpoints while still
 // allowing callers to inject custom serialization.
 type IdentitySerializer struct{}
 
@@ -46,29 +52,29 @@ func (IdentitySerializer) Deserialize(value any) (any, error) {
 }
 
 // DumpsTyped serializes value using JSON-compatible typed envelopes.
-func (IdentitySerializer) DumpsTyped(value any) (string, []byte, error) {
+func (IdentitySerializer) DumpsTyped(value any) (typeName string, payload []byte, err error) {
 	switch v := value.(type) {
 	case nil:
-		return "null", nil, nil
+		return serializedTypeNull, nil, nil
 	case []byte:
-		return "bytes", append([]byte(nil), v...), nil
+		return serializedTypeBytes, append([]byte(nil), v...), nil
 	default:
 		b, err := json.Marshal(v)
 		if err != nil {
 			return "", nil, err
 		}
-		return "json", b, nil
+		return serializedTypeJSON, b, nil
 	}
 }
 
 // LoadsTyped deserializes a typed envelope.
 func (IdentitySerializer) LoadsTyped(typeName string, payload []byte) (any, error) {
 	switch typeName {
-	case "null":
+	case serializedTypeNull:
 		return nil, nil
-	case "bytes":
+	case serializedTypeBytes:
 		return append([]byte(nil), payload...), nil
-	case "json":
+	case serializedTypeJSON:
 		var out any
 		if err := json.Unmarshal(payload, &out); err != nil {
 			return nil, err
@@ -107,29 +113,29 @@ func (JSONSerializer) Deserialize(value any) (any, error) {
 }
 
 // DumpsTyped serializes value as a `(type, bytes)` tuple.
-func (JSONSerializer) DumpsTyped(value any) (string, []byte, error) {
+func (JSONSerializer) DumpsTyped(value any) (typeName string, payload []byte, err error) {
 	switch v := value.(type) {
 	case nil:
-		return "null", nil, nil
+		return serializedTypeNull, nil, nil
 	case []byte:
-		return "bytes", append([]byte(nil), v...), nil
+		return serializedTypeBytes, append([]byte(nil), v...), nil
 	default:
 		b, err := json.Marshal(v)
 		if err != nil {
 			return "", nil, err
 		}
-		return "json", b, nil
+		return serializedTypeJSON, b, nil
 	}
 }
 
 // LoadsTyped deserializes a `(type, bytes)` tuple.
 func (JSONSerializer) LoadsTyped(typeName string, payload []byte) (any, error) {
 	switch typeName {
-	case "null":
+	case serializedTypeNull:
 		return nil, nil
-	case "bytes":
+	case serializedTypeBytes:
 		return append([]byte(nil), payload...), nil
-	case "json":
+	case serializedTypeJSON:
 		var out any
 		if err := json.Unmarshal(payload, &out); err != nil {
 			return nil, err
@@ -227,9 +233,9 @@ type serializerCompat struct {
 	legacy Serializer
 }
 
-func (s serializerCompat) DumpsTyped(value any) (string, []byte, error) {
+func (s serializerCompat) DumpsTyped(value any) (typeName string, payload []byte, err error) {
 	if value == nil {
-		return "null", nil, nil
+		return serializedTypeNull, nil, nil
 	}
 	raw, err := s.legacy.Serialize(value)
 	if err != nil {
@@ -247,17 +253,17 @@ func (s serializerCompat) DumpsTyped(value any) (string, []byte, error) {
 
 func (s serializerCompat) LoadsTyped(typeName string, payload []byte) (any, error) {
 	switch typeName {
-	case "null":
+	case serializedTypeNull:
 		return nil, nil
 	case "legacy-bytes":
 		return s.legacy.Deserialize(payload)
-	case "legacy-json", "json":
+	case "legacy-json", serializedTypeJSON:
 		var raw any
 		if err := json.Unmarshal(payload, &raw); err != nil {
 			return nil, err
 		}
 		return s.legacy.Deserialize(raw)
-	case "bytes":
+	case serializedTypeBytes:
 		return s.legacy.Deserialize(payload)
 	default:
 		var raw any

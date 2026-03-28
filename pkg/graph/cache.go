@@ -11,8 +11,8 @@ import (
 // InMemoryCache is a process-local Cache implementation for testing and
 // single-process deployments.
 type InMemoryCache struct {
-	mu      sync.RWMutex
 	entries map[string]map[string]cacheEntry
+	mu      sync.RWMutex
 }
 
 type cacheEntry struct {
@@ -26,7 +26,7 @@ func NewInMemoryCache() *InMemoryCache {
 }
 
 // Get returns a cached value and whether it exists.
-func (c *InMemoryCache) Get(ctx context.Context, key CacheKey) (any, bool, error) {
+func (c *InMemoryCache) Get(ctx context.Context, key CacheKey) (value any, ok bool, err error) {
 	hits, err := c.GetMany(ctx, []CacheLookupKey{{Namespace: key.NS, Key: key.Key}})
 	if err != nil {
 		return nil, false, err

@@ -19,8 +19,8 @@ import (
 
 // State is a simple counter with a log of visited nodes.
 type State struct {
-	Count   int
 	Visited []string
+	Count   int
 }
 
 func makeCounterNode(name string) graph.Node[State] {

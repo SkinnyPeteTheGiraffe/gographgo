@@ -88,7 +88,7 @@ func Run(ctx context.Context, stdout io.Writer, opts RunOptions) error {
 	return enc.Encode(run)
 }
 
-func resolveGraphSelection(cfg *Config, graphID string) (string, string, error) {
+func resolveGraphSelection(cfg *Config, graphID string) (selectedID, graphRef string, err error) {
 	want := strings.TrimSpace(graphID)
 	if want != "" {
 		ref, ok := cfg.Graphs[want]

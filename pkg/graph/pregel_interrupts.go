@@ -20,15 +20,10 @@ type pendingInterrupt struct {
 	Path        []any
 }
 
-func resumeConfig(metadata map[string]any) (map[string]Dynamic, []Dynamic, bool, error) {
+func resumeConfig(metadata map[string]any) (resumeMap map[string]Dynamic, resumeValues []Dynamic, hasResume bool, err error) {
 	if len(metadata) == 0 {
 		return nil, nil, false, nil
 	}
-
-	var (
-		resumeMap    map[string]Dynamic
-		resumeValues []Dynamic
-	)
 
 	if raw, ok := metadata[ConfigKeyResumeMap]; ok {
 		rm, err := normalizeResumeMap(raw)
@@ -46,7 +41,7 @@ func resumeConfig(metadata map[string]any) (map[string]Dynamic, []Dynamic, bool,
 		resumeValues = values
 	}
 
-	hasResume := len(resumeMap) > 0 || len(resumeValues) > 0
+	hasResume = len(resumeMap) > 0 || len(resumeValues) > 0
 	return resumeMap, resumeValues, hasResume, nil
 }
 
@@ -198,6 +193,20 @@ func interruptsByTask(writes []checkpoint.PendingWrite) map[string]pendingInterr
 }
 
 func pendingInterruptFromValue(value any) (pendingInterrupt, bool) {
+	if iv, ok := pendingInterruptFromDirectValue(value); ok {
+		return iv, true
+	}
+	if items, ok := value.([]any); ok {
+		for _, item := range items {
+			if iv, ok := pendingInterruptFromValue(item); ok {
+				return iv, true
+			}
+		}
+	}
+	return pendingInterrupt{}, false
+}
+
+func pendingInterruptFromDirectValue(value any) (pendingInterrupt, bool) {
 	switch v := value.(type) {
 	case interruptWrite:
 		if v.Interrupt.ID == "" {
@@ -224,12 +233,6 @@ func pendingInterruptFromValue(value any) (pendingInterrupt, bool) {
 			return pendingInterrupt{}, false
 		}
 		return pendingInterrupt{InterruptID: v[0].ID}, true
-	case []any:
-		for _, item := range v {
-			if iv, ok := pendingInterruptFromValue(item); ok {
-				return iv, true
-			}
-		}
 	}
 	return pendingInterrupt{}, false
 }
@@ -240,57 +243,74 @@ func applyResumeWrites(
 	resumeValues []Dynamic,
 ) ([]checkpoint.PendingWrite, []pendingInterrupt, error) {
 	unresolved := pendingInterrupts(pending)
+	if err := validateResumeRequest(unresolved, resumeMap, resumeValues); err != nil {
+		return pending, nil, err
+	}
 	if len(unresolved) == 0 {
-		if len(resumeMap) > 0 || len(resumeValues) > 0 {
-			return pending, nil, fmt.Errorf("no pending interrupts to resume")
-		}
 		return pending, nil, nil
 	}
 
-	updates := make([]checkpoint.PendingWrite, 0, len(unresolved))
-
-	if len(resumeMap) > 0 {
-		for _, iv := range unresolved {
-			value, ok := resumeMap[iv.InterruptID]
-			if !ok {
-				continue
-			}
-			updates = append(updates, checkpoint.PendingWrite{
-				TaskID:  iv.TaskID,
-				Channel: pregelResume,
-				Value:   []Dynamic{value},
-			})
-		}
-		for id := range resumeMap {
-			matched := false
-			for _, iv := range unresolved {
-				if iv.InterruptID == id {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				return pending, nil, fmt.Errorf("%s contains unknown interrupt id %q", ConfigKeyResumeMap, id)
-			}
-		}
+	mapUpdates, err := resumeMapUpdates(unresolved, resumeMap)
+	if err != nil {
+		return pending, nil, err
 	}
-
-	if len(resumeValues) > 0 {
-		if len(unresolved) > 1 {
-			return pending, nil, fmt.Errorf("multiple pending interrupts require %s with interrupt ids", ConfigKeyResumeMap)
-		}
-		updates = append(updates, checkpoint.PendingWrite{
-			TaskID:  unresolved[0].TaskID,
-			Channel: pregelResume,
-			Value:   resumeValues,
-		})
+	valueUpdates, err := resumeValueUpdates(unresolved, resumeValues)
+	if err != nil {
+		return pending, nil, err
 	}
-
-	if len(updates) == 0 {
+	mapUpdates = append(mapUpdates, valueUpdates...)
+	if len(mapUpdates) == 0 {
 		return pending, unresolved, nil
 	}
-	pending = mergePendingWrites(pending, updates)
+	pending = mergePendingWrites(pending, mapUpdates)
 	return pending, unresolved, nil
+}
+
+func validateResumeRequest(unresolved []pendingInterrupt, resumeMap map[string]Dynamic, resumeValues []Dynamic) error {
+	if len(unresolved) > 0 {
+		return nil
+	}
+	if len(resumeMap) == 0 && len(resumeValues) == 0 {
+		return nil
+	}
+	return fmt.Errorf("no pending interrupts to resume")
+}
+
+func resumeMapUpdates(unresolved []pendingInterrupt, resumeMap map[string]Dynamic) ([]checkpoint.PendingWrite, error) {
+	if len(resumeMap) == 0 {
+		return nil, nil
+	}
+	byID := make(map[string]pendingInterrupt, len(unresolved))
+	for _, iv := range unresolved {
+		byID[iv.InterruptID] = iv
+	}
+	updates := make([]checkpoint.PendingWrite, 0, len(resumeMap))
+	for id, value := range resumeMap {
+		iv, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("%s contains unknown interrupt id %q", ConfigKeyResumeMap, id)
+		}
+		updates = append(updates, checkpoint.PendingWrite{
+			TaskID:  iv.TaskID,
+			Channel: pregelResume,
+			Value:   []Dynamic{value},
+		})
+	}
+	return updates, nil
+}
+
+func resumeValueUpdates(unresolved []pendingInterrupt, resumeValues []Dynamic) ([]checkpoint.PendingWrite, error) {
+	if len(resumeValues) == 0 {
+		return nil, nil
+	}
+	if len(unresolved) > 1 {
+		return nil, fmt.Errorf("multiple pending interrupts require %s with interrupt ids", ConfigKeyResumeMap)
+	}
+	return []checkpoint.PendingWrite{{
+		TaskID:  unresolved[0].TaskID,
+		Channel: pregelResume,
+		Value:   resumeValues,
+	}}, nil
 }
 
 func taskResumeValues(pending []checkpoint.PendingWrite, taskID string) []Dynamic {

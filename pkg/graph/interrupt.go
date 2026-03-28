@@ -14,17 +14,9 @@ import (
 //
 // Mirrors Python LangGraph's _internal/_scratchpad.py Scratchpad class.
 type taskScratchpad struct {
-	// resume holds the resume values provided by a Command(resume=...) call.
-	// They are matched positionally to interrupt() calls within the node.
-	resume []Dynamic
-
-	// counter is the number of interrupt() calls made so far in this task.
-	counter int
-
-	// onResume is called whenever NodeInterrupt returns a resume value.
-	// It allows the runtime to persist RESUME-channel writes for parity with
-	// LangGraph's interrupt scratchpad behavior.
 	onResume func(resume []Dynamic)
+	resume   []Dynamic
+	counter  int
 }
 
 // interruptCounter increments the counter and returns the old value.

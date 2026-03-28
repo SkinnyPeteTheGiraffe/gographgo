@@ -120,7 +120,7 @@ func TestJSONPlusSerializer_WithMsgpackAllowlist(t *testing.T) {
 
 type passthroughCipher struct{}
 
-func (passthroughCipher) Encrypt(plaintext []byte) (string, []byte, error) {
+func (passthroughCipher) Encrypt(plaintext []byte) (cipherName string, ciphertext []byte, err error) {
 	return "passthrough", append([]byte(nil), plaintext...), nil
 }
 

@@ -17,6 +17,7 @@ func RunCommand(ctx context.Context, stdout, stderr io.Writer, name string, args
 		return fmt.Errorf("empty command")
 	}
 
+	// #nosec G204 -- CLI execution intentionally runs user-selected commands.
 	cmd := exec.CommandContext(ctx, cmdName, args...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
@@ -36,6 +37,7 @@ func RunShellCommand(ctx context.Context, stdout, stderr io.Writer, command stri
 		return fmt.Errorf("empty command")
 	}
 
+	// #nosec G204 -- CLI shell mode intentionally executes configured shell text.
 	cmd := exec.CommandContext(ctx, "sh", "-c", cmdText)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

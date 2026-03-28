@@ -71,7 +71,11 @@ func TestServer_RunStateHistoryStoreAndEvents(t *testing.T) {
 		t.Fatalf("store value = %v, want first=Ada", storeVal.Value)
 	}
 
-	resp, err := http.Get(httpSrv.URL + "/v1/threads/" + thread.ID + "/runs/" + run.ID + "/events")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, httpSrv.URL+"/v1/threads/"+thread.ID+"/runs/"+run.ID+"/events", http.NoBody)
+	if err != nil {
+		t.Fatalf("new events request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("events get: %v", err)
 	}
@@ -106,7 +110,7 @@ func TestServer_ThreadStoreRejectsUnsupportedOptions(t *testing.T) {
 
 	thread := postJSON[server.Thread](t, httpSrv.URL+"/v1/threads", `{}`, http.StatusCreated)
 
-	putReq, err := http.NewRequest(http.MethodPut, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/profile/name", strings.NewReader(`{"value":{"first":"Ada"},"index":{"fields":["first"]}}`))
+	putReq, err := http.NewRequestWithContext(context.Background(), http.MethodPut, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/profile/name", strings.NewReader(`{"value":{"first":"Ada"},"index":{"fields":["first"]}}`))
 	if err != nil {
 		t.Fatalf("new put request: %v", err)
 	}
@@ -122,7 +126,11 @@ func TestServer_ThreadStoreRejectsUnsupportedOptions(t *testing.T) {
 
 	putJSONNoResp(t, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/profile/name", `{"value":{"first":"Ada"}}`, http.StatusOK)
 
-	resp, err := http.Get(httpSrv.URL + "/v1/threads/" + thread.ID + "/store/profile/name?refresh_ttl=true")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, httpSrv.URL+"/v1/threads/"+thread.ID+"/store/profile/name?refresh_ttl=true", http.NoBody)
+	if err != nil {
+		t.Fatalf("new get request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("get request: %v", err)
 	}
@@ -196,7 +204,7 @@ func putJSONNoResp(t *testing.T, url, body string, wantStatus int) {
 
 func getJSON[T any](t *testing.T, url string, wantStatus int) T {
 	t.Helper()
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}

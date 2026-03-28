@@ -30,17 +30,17 @@ type ToolArgsSchemaProvider interface {
 // Supported schema values:
 //   - `ToolArgsValidator`
 //   - struct values, pointers to structs, or `reflect.Type` for struct types
-//   - functions with one struct parameter (used as schema shape)
+//   - functions with one struct parameter (used as a schema shape)
 type ValidationSchemaSpec struct {
-	Name   string
 	Schema any
+	Name   string
 }
 
 // ToolValidationSchema is the compiled schema entry for one tool.
 type ToolValidationSchema struct {
-	Name      string
-	Source    any
 	Validator ToolArgsValidator
+	Source    any
+	Name      string
 }
 
 // ValidationErrorFormatter turns validation failures into message content.
@@ -127,49 +127,12 @@ func (n *ValidationNode) Validate(ctx context.Context, calls []ToolCall) ([]Tool
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := ctx.Err(); err != nil {
-				select {
-				case errCh <- err:
-				default:
-				}
-				return
-			}
-
-			schema, ok := n.schemasByName[call.Name]
-			if !ok {
-				results[idx] = ToolMessage{
-					ToolCallID: call.ID,
-					Name:       call.Name,
-					Status:     "error",
-					Content:    fmt.Sprintf("No validator registered for tool %q", call.Name),
-				}
-				return
-			}
-
-			if err := schema.Validator(cloneArgs(call.Args)); err != nil {
-				results[idx] = ToolMessage{
-					ToolCallID: call.ID,
-					Name:       call.Name,
-					Status:     "error",
-					Content:    n.formatError(err, call, schema),
-				}
-				return
-			}
-
-			b, err := json.Marshal(call.Args)
+			result, err := n.validateCall(ctx, call)
 			if err != nil {
-				select {
-				case errCh <- err:
-				default:
-				}
+				reportValidationError(errCh, err)
 				return
 			}
-			results[idx] = ToolMessage{
-				ToolCallID: call.ID,
-				Name:       call.Name,
-				Status:     "ok",
-				Content:    string(b),
-			}
+			results[idx] = result
 		}()
 	}
 
@@ -180,6 +143,56 @@ func (n *ValidationNode) Validate(ctx context.Context, calls []ToolCall) ([]Tool
 	default:
 	}
 	return results, nil
+}
+
+func (n *ValidationNode) validateCall(ctx context.Context, call ToolCall) (ToolMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return ToolMessage{}, err
+	}
+
+	schema, ok := n.schemasByName[call.Name]
+	if !ok {
+		return toolValidationFailure(call, fmt.Sprintf("No validator registered for tool %q", call.Name)), nil
+	}
+
+	if err := schema.Validator(cloneArgs(call.Args)); err != nil {
+		return toolValidationFailure(call, n.formatError(err, call, schema)), nil
+	}
+
+	content, err := marshalToolArgs(call.Args)
+	if err != nil {
+		return ToolMessage{}, err
+	}
+	return ToolMessage{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Status:     "ok",
+		Content:    content,
+	}, nil
+}
+
+func reportValidationError(errCh chan error, err error) {
+	select {
+	case errCh <- err:
+	default:
+	}
+}
+
+func toolValidationFailure(call ToolCall, content string) ToolMessage {
+	return ToolMessage{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Status:     "error",
+		Content:    content,
+	}
+}
+
+func marshalToolArgs(args map[string]any) (string, error) {
+	b, err := json.Marshal(args)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 func compileValidationSchema(source any) (ToolValidationSchema, error) {
@@ -237,7 +250,7 @@ func compileToolArgsValidator(source any) (ToolArgsValidator, error) {
 	}
 
 	t := reflect.TypeOf(source)
-	validatorType := reflect.TypeOf((ToolArgsValidator)(nil))
+	validatorType := reflect.TypeOf((*ToolArgsValidator)(nil)).Elem()
 	if t.Kind() == reflect.Func && t.AssignableTo(validatorType) {
 		converted := reflect.ValueOf(source).Convert(validatorType)
 		validator, _ := converted.Interface().(ToolArgsValidator)

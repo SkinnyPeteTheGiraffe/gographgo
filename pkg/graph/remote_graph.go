@@ -118,7 +118,7 @@ func (g *RemoteGraph) StreamTyped(
 	ctx context.Context,
 	input map[string]any,
 	modes ...StreamMode,
-) (<-chan sdk.StreamPartV2, <-chan error) {
+) (parts <-chan sdk.StreamPartV2, errs <-chan error) {
 	threadID := g.resolveRunThreadID(ctx)
 
 	req := cloneRunStreamRequest(g.opts.RunStream)
@@ -327,7 +327,7 @@ func cloneAnyMap(in map[string]any) map[string]any {
 	return out
 }
 
-func mergeAnyMaps(base map[string]any, overlay map[string]any) map[string]any {
+func mergeAnyMaps(base, overlay map[string]any) map[string]any {
 	out := cloneAnyMap(base)
 	if out == nil {
 		out = map[string]any{}
@@ -352,7 +352,7 @@ func streamModeStrings(modes ...StreamMode) []string {
 	return out
 }
 
-func extractInterrupts(output map[string]any) ([]Interrupt, map[string]any) {
+func extractInterrupts(output map[string]any) (interrupts []Interrupt, cleaned map[string]any) {
 	if len(output) == 0 {
 		return nil, output
 	}

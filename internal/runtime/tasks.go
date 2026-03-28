@@ -27,29 +27,17 @@ type Task struct {
 
 // Write is a pending channel update produced by a task.
 type Write struct {
-	// Channel is the target channel name.
+	Value   any
 	Channel string
-
-	// Value is the value to write.
-	Value any
 }
 
 // TaskResult holds the outcome of an executed Task.
 type TaskResult struct {
-	// TaskID is the ID of the task that produced this result.
-	TaskID string
-
-	// Node is the name of the node that ran.
-	Node string
-
-	// Writes contains the channel updates produced by the node.
-	Writes []Write
-
-	// Interrupts contains any interrupt values raised during execution.
+	Err        error
+	TaskID     string
+	Node       string
+	Writes     []Write
 	Interrupts []graph.Interrupt
-
-	// Err is set if the node returned an error.
-	Err error
 }
 
 // ShouldInterrupt returns true if any task in the list matches one of the

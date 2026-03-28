@@ -40,17 +40,17 @@ type Node[State any] func(ctx context.Context, state State) (NodeResult, error)
 
 // TaskContext carries per-task metadata available to ChannelWrite hooks.
 type TaskContext[State any] struct {
-	ID           string
-	Name         string
-	Path         []any
-	CheckpointNS string
-	Triggers     []string
-	Tags         []string
 	Input        State
-	IsPush       bool
 	InputSchema  any
 	CacheKey     *CacheKey
+	ID           string
+	Name         string
+	CheckpointNS string
+	Path         []any
+	Triggers     []string
+	Tags         []string
 	Subgraphs    []string
+	IsPush       bool
 }
 
 // ChannelWrite is a per-node output hook that can transform a node result.
@@ -118,9 +118,6 @@ type Edge struct {
 
 // WaitingEdge represents an edge that waits for multiple sources.
 type WaitingEdge struct {
-	// Sources are the starting nodes.
+	Target  string
 	Sources []string
-
-	// Target is the destination node.
-	Target string
 }

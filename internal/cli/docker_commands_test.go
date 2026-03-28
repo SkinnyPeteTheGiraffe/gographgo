@@ -11,9 +11,9 @@ import (
 )
 
 type recordedCommand struct {
+	env  map[string]string
 	name string
 	args []string
-	env  map[string]string
 }
 
 func TestDockerfile(t *testing.T) {

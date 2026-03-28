@@ -3,16 +3,17 @@ package cli
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCreateNew(t *testing.T) {
-	t.Parallel()
 	origGet := httpGet
 	t.Cleanup(func() { httpGet = origGet })
 
@@ -29,7 +30,7 @@ func TestCreateNew(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	httpGet = func(_ string) (*http.Response, error) {
+	httpGet = func(_ *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
@@ -52,9 +53,57 @@ func TestCreateNew(t *testing.T) {
 }
 
 func TestCreateNewInvalidTemplate(t *testing.T) {
-	t.Parallel()
 	err := CreateNew(t.TempDir(), "missing-template", io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected template error, got %v", err)
+	}
+}
+
+func TestNewTemplateRequest_RejectsNonHTTPS(t *testing.T) {
+	_, err := newTemplateRequest(context.Background(), "http://github.com/langchain-ai/deep-agent-template/archive/refs/heads/main.zip")
+	if err == nil || !strings.Contains(err.Error(), "must be https") {
+		t.Fatalf("expected https validation error, got %v", err)
+	}
+}
+
+func TestNewTemplateRequest_UsesProvidedContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(cancel)
+	req, err := newTemplateRequest(ctx, "https://github.com/langchain-ai/deep-agent-template/archive/refs/heads/main.zip")
+	if err != nil {
+		t.Fatalf("newTemplateRequest() error = %v", err)
+	}
+	deadline, ok := req.Context().Deadline()
+	if !ok {
+		t.Fatal("expected request context deadline")
+	}
+	if time.Until(deadline) <= 0 {
+		t.Fatalf("expected future deadline, got %v", deadline)
+	}
+}
+
+func TestCreateNew_RejectsOversizedArchive(t *testing.T) {
+	origGet := httpGet
+	t.Cleanup(func() { httpGet = origGet })
+
+	httpGet = func(_ *http.Request) (*http.Response, error) {
+		body := bytes.Repeat([]byte("a"), maxTemplateArchiveBytes+1)
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(bytes.NewReader(body))}, nil
+	}
+
+	err := CreateNew(t.TempDir(), "new-langgraph-project-python", io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("expected size limit error, got %v", err)
+	}
+}
+
+func TestCreateNew_PropagatesRequestBuildError(t *testing.T) {
+	origTemplates := templates
+	templates = map[string]Template{"bad": {Description: "bad", URL: ":://bad"}}
+	t.Cleanup(func() { templates = origTemplates })
+
+	err := CreateNew(t.TempDir(), "bad", io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "invalid template URL") {
+		t.Fatal("expected invalid URL error")
 	}
 }

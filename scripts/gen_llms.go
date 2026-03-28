@@ -1,4 +1,4 @@
-// gen_llms generates docs/llms.md — a condensed, LLM-optimised reference that
+// The gen_llms generates docs/llms.md — a condensed, LLM-optimized reference that
 // aggregates README.md and all docs/*.md files into a single file.
 //
 // Run with:
@@ -72,6 +72,7 @@ func main() {
 	}
 
 	dest := filepath.Join(root, "docs", "llms.md")
+	// #nosec G306 -- llms.md is generated project documentation and should be world-readable.
 	if err := os.WriteFile(dest, []byte(strings.TrimRight(out.String(), "\n")+"\n"), 0o644); err != nil {
 		fatalf("writing %s: %v\n", dest, err)
 	}

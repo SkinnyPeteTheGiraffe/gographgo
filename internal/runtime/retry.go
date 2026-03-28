@@ -1,13 +1,14 @@
 // Package runtime contains private runtime orchestration internals for gographgo.
 //
 // This package implements the execution primitives used by the Pregel runtime,
-// mirroring Python LangGraph's langgraph/_internal/_retry.py behaviour.
+// mirroring Python LangGraph's langgraph/_internal/_retry.py behavior.
 package runtime
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"math"
-	"math/rand"
 	"time"
 
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/graph"
@@ -19,7 +20,7 @@ import (
 // error when RetryOn is nil), applying exponential backoff between attempts.
 // Jitter, when enabled, adds up to 25% random duration to each sleep.
 //
-// The attempt loop is context-aware: a cancelled context aborts the retry
+// The attempt loop is context-aware: a canceled context aborts the retry
 // loop and returns ctx.Err() immediately.
 func ExecuteWithRetry(ctx context.Context, policy graph.RetryPolicy, fn func() error) error {
 	retryOn := policy.RetryOn
@@ -80,6 +81,16 @@ func jitteredSleep(base time.Duration, jitter bool) time.Duration {
 	if !jitter {
 		return base
 	}
-	extra := time.Duration(float64(base) * rand.Float64() * 0.25)
+	jitterFraction := cryptoJitterFraction()
+	extra := time.Duration(float64(base) * jitterFraction * 0.25)
 	return base + extra
+}
+
+func cryptoJitterFraction() float64 {
+	var b [8]byte
+	if _, err := cryptorand.Read(b[:]); err != nil {
+		return 0
+	}
+	v := binary.BigEndian.Uint64(b[:])
+	return float64(v) / float64(^uint64(0))
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint"
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint/postgres"
+
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
 )
 

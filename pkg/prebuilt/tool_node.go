@@ -29,9 +29,9 @@ const (
 
 // ToolCall is a single model-requested tool invocation.
 type ToolCall struct {
+	Args map[string]any `json:"args"`
 	ID   string         `json:"id"`
 	Name string         `json:"name"`
-	Args map[string]any `json:"args"`
 }
 
 // ToolMessage is the result envelope returned by ToolNode.
@@ -39,9 +39,9 @@ type ToolMessage struct {
 	ToolCallID string `json:"tool_call_id"`
 	Name       string `json:"name"`
 	Content    string `json:"content"`
+	Status     string `json:"status,omitempty"`
 	// ContentBlocks carries structured block content output when returned by tools.
 	ContentBlocks []map[string]any `json:"content_blocks,omitempty"`
-	Status        string           `json:"status,omitempty"`
 }
 
 // ToolCommand allows tools to update state and direct control flow.
@@ -59,12 +59,12 @@ type Tool interface {
 
 // ToolRuntime carries invocation-scoped runtime values for tools.
 type ToolRuntime struct {
-	ToolCallID   string
 	State        any
-	Config       graph.Config
-	Store        graph.Store
 	Context      any
+	Store        graph.Store
 	StreamWriter func(any)
+	ToolCallID   string
+	Config       graph.Config
 }
 
 // RuntimeAwareTool can receive a full runtime object during invocation.
@@ -89,11 +89,11 @@ type ReturnDirectTool interface {
 
 // ToolFunc adapts a function into a Tool implementation.
 type ToolFunc struct {
-	name         string
 	fn           func(context.Context, map[string]any) (any, error)
 	runtimeFn    func(context.Context, map[string]any, ToolRuntime) (any, error)
 	stateFn      func(context.Context, map[string]any, any) (any, error)
 	storeFn      func(context.Context, map[string]any, graph.Store) (any, error)
+	name         string
 	returnDirect bool
 }
 
@@ -233,9 +233,9 @@ func (e *ToolInvocationError) Unwrap() error {
 
 // ToolCallRequest is passed to an interceptor around tool execution.
 type ToolCallRequest struct {
-	ToolCall ToolCall
 	Tool     Tool
 	State    any
+	ToolCall ToolCall
 }
 
 // Override returns a shallow clone with selected overrides applied.
@@ -292,11 +292,11 @@ func DefaultToolErrorFilter(err error) bool {
 type ToolNode struct {
 	toolsByName      map[string]Tool
 	validatorsByName map[string]ToolArgsValidator
-	handleToolErrors bool
 	errorHandler     ToolErrorHandler
 	errorFilter      ToolErrorFilter
 	wrapToolCall     ToolCallWrapper
 	wrapToolResult   ToolCallResultWrapper
+	handleToolErrors bool
 }
 
 // ToolNodeOption configures ToolNode behavior.
@@ -490,68 +490,7 @@ func (n *ToolNode) RunResultsWithState(ctx context.Context, calls []ToolCall, st
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			defer func() {
-				if r := recover(); r != nil {
-					panicOnce.Do(func() { panicValue = r })
-					cancel()
-				}
-			}()
-			if err := runCtx.Err(); err != nil {
-				select {
-				case errCh <- err:
-				default:
-				}
-				return
-			}
-
-			tool := n.toolsByName[call.Name]
-
-			request := ToolCallRequest{ToolCall: call, Tool: tool, State: state}
-			exec := func(req ToolCallRequest) (ToolCallResult, error) {
-				return n.executeOne(runCtx, req)
-			}
-
-			var (
-				result ToolCallResult
-				err    error
-			)
-			if n.wrapToolResult != nil {
-				result, err = n.wrapToolResult(request, exec)
-			} else if n.wrapToolCall != nil {
-				msg, wrapErr := n.wrapToolCall(request, func(req ToolCallRequest) (ToolMessage, error) {
-					execResult, execErr := exec(req)
-					if execErr != nil {
-						return ToolMessage{}, execErr
-					}
-					if execResult.Message == nil {
-						return ToolMessage{}, errors.New("prebuilt: wrapper execute received command output; use WithToolCallResultWrapper")
-					}
-					return *execResult.Message, nil
-				})
-				result = toolMessageResult(msg)
-				err = wrapErr
-			} else {
-				result, err = exec(request)
-			}
-			if err != nil {
-				if n.handleToolErrors && n.errorFilter(err) {
-					msg := ToolMessage{
-						ToolCallID: call.ID,
-						Name:       call.Name,
-						Status:     "error",
-						Content:    n.errorHandler(call, err),
-					}
-					results[idx] = toolMessageResult(msg)
-					return
-				}
-				cancel()
-				select {
-				case errCh <- err:
-				default:
-				}
-				return
-			}
-			results[idx] = result
+			n.runResultWorker(runCtx, cancel, call, idx, state, results, errCh, &panicOnce, &panicValue)
 		}()
 	}
 
@@ -565,6 +504,102 @@ func (n *ToolNode) RunResultsWithState(ctx context.Context, calls []ToolCall, st
 	default:
 	}
 	return results, nil
+}
+
+func (n *ToolNode) runResultWorker(
+	runCtx context.Context,
+	cancel context.CancelFunc,
+	call ToolCall,
+	idx int,
+	state any,
+	results []ToolCallResult,
+	errCh chan<- error,
+	panicOnce *sync.Once,
+	panicValue *any,
+) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			panicOnce.Do(func() {
+				*panicValue = recovered
+			})
+			cancel()
+		}
+	}()
+
+	if err := runCtx.Err(); err != nil {
+		trySendToolError(errCh, err)
+		return
+	}
+
+	request := ToolCallRequest{ToolCall: call, Tool: n.toolsByName[call.Name], State: state}
+	result, err := n.executeToolCallWithWrappers(runCtx, request)
+	if err != nil {
+		handled, ok := n.resultForHandledToolError(call, err)
+		if ok {
+			results[idx] = handled
+			return
+		}
+		cancel()
+		trySendToolError(errCh, err)
+		return
+	}
+
+	results[idx] = result
+}
+
+func (n *ToolNode) executeToolCallWithWrappers(ctx context.Context, request ToolCallRequest) (ToolCallResult, error) {
+	exec := func(req ToolCallRequest) (ToolCallResult, error) {
+		return n.executeOne(ctx, req)
+	}
+
+	if n.wrapToolResult != nil {
+		return n.wrapToolResult(request, exec)
+	}
+	if n.wrapToolCall == nil {
+		return exec(request)
+	}
+
+	message, err := n.wrapToolCall(request, func(req ToolCallRequest) (ToolMessage, error) {
+		execResult, execErr := exec(req)
+		if execErr != nil {
+			return ToolMessage{}, execErr
+		}
+		if execResult.Message == nil {
+			return ToolMessage{}, errors.New("prebuilt: wrapper execute received command output; use WithToolCallResultWrapper")
+		}
+		return *execResult.Message, nil
+	})
+	if err != nil {
+		return ToolCallResult{}, err
+	}
+	return toolMessageResult(message), nil
+}
+
+func (n *ToolNode) resultForHandledToolError(call ToolCall, err error) (ToolCallResult, bool) {
+	if !n.handleToolErrors || !n.errorFilter(err) {
+		return ToolCallResult{}, false
+	}
+	return toolMessageResult(ToolMessage{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Status:     "error",
+		Content:    n.errorHandler(call, err),
+	}), true
+}
+
+func (n *ToolNode) handleToolError(call ToolCall, err error) (ToolCallResult, error) {
+	handled, ok := n.resultForHandledToolError(call, err)
+	if ok {
+		return handled, nil
+	}
+	return ToolCallResult{}, err
+}
+
+func trySendToolError(errCh chan<- error, err error) {
+	select {
+	case errCh <- err:
+	default:
+	}
 }
 
 func (n *ToolNode) executeOne(ctx context.Context, req ToolCallRequest) (ToolCallResult, error) {
@@ -586,108 +621,106 @@ func (n *ToolNode) executeOne(ctx context.Context, req ToolCallRequest) (ToolCal
 	invokeArgs[InjectedStoreArg] = runtime.Store
 	invokeArgs[InjectedRuntimeArg] = runtime
 
-	if validator, ok := n.validatorsByName[call.Name]; ok && validator != nil {
-		if err := validator(cloneArgs(invokeArgs)); err != nil {
-			wrapped := wrapToolInvocationError(call, err)
-			invErr, ok := wrapped.(*ToolInvocationError)
-			if !ok {
-				invErr = &ToolInvocationError{ToolName: call.Name, ToolArgs: cloneArgs(call.Args), Source: wrapped}
-			}
-			invErr.FilteredErrors = filterInjectedIssues(invErr.FilteredErrors)
-			if !n.handleToolErrors || !n.errorFilter(invErr) {
-				return ToolCallResult{}, invErr
-			}
-			return toolMessageResult(ToolMessage{
-				ToolCallID: call.ID,
-				Name:       call.Name,
-				Status:     "error",
-				Content:    n.errorHandler(call, invErr),
-			}), nil
-		}
+	if err := n.validateToolArgs(call, invokeArgs); err != nil {
+		return n.handleToolError(call, err)
 	}
 
-	var (
-		value any
-		err   error
-	)
-	switch t := tool.(type) {
-	case *ToolFunc:
-		switch {
-		case t.runtimeFn != nil:
-			value, err = t.runtimeFn(ctx, cloneArgs(call.Args), runtime)
-		case t.stateFn != nil:
-			value, err = t.stateFn(ctx, cloneArgs(call.Args), runtime.State)
-		case t.storeFn != nil:
-			value, err = t.storeFn(ctx, cloneArgs(call.Args), runtime.Store)
-		default:
-			value, err = t.Invoke(ctx, invokeArgs)
-		}
-	case RuntimeAwareTool:
-		value, err = t.InvokeWithRuntime(ctx, cloneArgs(call.Args), runtime)
-	case StateAwareTool:
-		value, err = t.InvokeWithState(ctx, cloneArgs(call.Args), runtime.State)
-	case StoreAwareTool:
-		value, err = t.InvokeWithStore(ctx, cloneArgs(call.Args), runtime.Store)
-	default:
-		value, err = tool.Invoke(ctx, invokeArgs)
-	}
+	value, err := invokeToolValue(ctx, tool, call.Args, invokeArgs, runtime)
 	if err != nil {
 		if isGraphBubbleUp(err) {
 			return ToolCallResult{}, err
 		}
-		handledErr := wrapToolInvocationErrorIfValidation(call, err)
-		if invErr, ok := handledErr.(*ToolInvocationError); ok {
-			invErr.FilteredErrors = filterInjectedIssues(invErr.FilteredErrors)
-		}
-		if !n.handleToolErrors || !n.errorFilter(handledErr) {
-			return ToolCallResult{}, handledErr
-		}
-		return toolMessageResult(ToolMessage{
-			ToolCallID: call.ID,
-			Name:       call.Name,
-			Status:     "error",
-			Content:    n.errorHandler(call, handledErr),
-		}), nil
+		return n.handleToolError(call, normalizeInvokeError(call, err))
 	}
+
+	return n.resultFromToolValue(call, value)
+}
+
+func (n *ToolNode) validateToolArgs(call ToolCall, invokeArgs map[string]any) error {
+	validator, ok := n.validatorsByName[call.Name]
+	if !ok || validator == nil {
+		return nil
+	}
+
+	err := validator(cloneArgs(invokeArgs))
+	if err == nil {
+		return nil
+	}
+
+	wrapped := wrapToolInvocationError(call, err)
+	invErr, ok := wrapped.(*ToolInvocationError)
+	if !ok {
+		invErr = &ToolInvocationError{ToolName: call.Name, ToolArgs: cloneArgs(call.Args), Source: wrapped}
+	}
+	invErr.FilteredErrors = filterInjectedIssues(invErr.FilteredErrors)
+	return invErr
+}
+
+func normalizeInvokeError(call ToolCall, err error) error {
+	handledErr := wrapToolInvocationErrorIfValidation(call, err)
+	invErr, ok := handledErr.(*ToolInvocationError)
+	if ok {
+		invErr.FilteredErrors = filterInjectedIssues(invErr.FilteredErrors)
+	}
+	return handledErr
+}
+
+func invokeToolValue(
+	ctx context.Context,
+	tool Tool,
+	rawArgs map[string]any,
+	invokeArgs map[string]any,
+	runtime ToolRuntime,
+) (any, error) {
+	switch typed := tool.(type) {
+	case *ToolFunc:
+		return invokeToolFunc(ctx, typed, rawArgs, invokeArgs, runtime)
+	case RuntimeAwareTool:
+		return typed.InvokeWithRuntime(ctx, cloneArgs(rawArgs), runtime)
+	case StateAwareTool:
+		return typed.InvokeWithState(ctx, cloneArgs(rawArgs), runtime.State)
+	case StoreAwareTool:
+		return typed.InvokeWithStore(ctx, cloneArgs(rawArgs), runtime.Store)
+	default:
+		return tool.Invoke(ctx, invokeArgs)
+	}
+}
+
+func invokeToolFunc(
+	ctx context.Context,
+	tool *ToolFunc,
+	rawArgs map[string]any,
+	invokeArgs map[string]any,
+	runtime ToolRuntime,
+) (any, error) {
+	switch {
+	case tool.runtimeFn != nil:
+		return tool.runtimeFn(ctx, cloneArgs(rawArgs), runtime)
+	case tool.stateFn != nil:
+		return tool.stateFn(ctx, cloneArgs(rawArgs), runtime.State)
+	case tool.storeFn != nil:
+		return tool.storeFn(ctx, cloneArgs(rawArgs), runtime.Store)
+	default:
+		return tool.Invoke(ctx, invokeArgs)
+	}
+}
+
+func (n *ToolNode) resultFromToolValue(call ToolCall, value any) (ToolCallResult, error) {
 
 	if cmd, ok, cmdErr := coerceToolCommand(value); ok || cmdErr != nil {
 		if cmdErr != nil {
-			if !n.handleToolErrors || !n.errorFilter(cmdErr) {
-				return ToolCallResult{}, cmdErr
-			}
-			return toolMessageResult(ToolMessage{
-				ToolCallID: call.ID,
-				Name:       call.Name,
-				Status:     "error",
-				Content:    n.errorHandler(call, cmdErr),
-			}), nil
+			return n.handleToolError(call, cmdErr)
 		}
 		validated, err := validateToolCommand(cmd, call)
 		if err != nil {
-			if !n.handleToolErrors || !n.errorFilter(err) {
-				return ToolCallResult{}, err
-			}
-			return toolMessageResult(ToolMessage{
-				ToolCallID: call.ID,
-				Name:       call.Name,
-				Status:     "error",
-				Content:    n.errorHandler(call, err),
-			}), nil
+			return n.handleToolError(call, err)
 		}
 		return toolCommandResult(validated), nil
 	}
 
 	content, blocks, convErr := contentOutput(value)
 	if convErr != nil {
-		if !n.handleToolErrors || !n.errorFilter(convErr) {
-			return ToolCallResult{}, convErr
-		}
-		return toolMessageResult(ToolMessage{
-			ToolCallID: call.ID,
-			Name:       call.Name,
-			Status:     "error",
-			Content:    n.errorHandler(call, convErr),
-		}), nil
+		return n.handleToolError(call, convErr)
 	}
 
 	return toolMessageResult(ToolMessage{
@@ -734,7 +767,7 @@ func (n *ToolNode) joinToolNames() string {
 	return out
 }
 
-func contentOutput(v any) (string, []map[string]any, error) {
+func contentOutput(v any) (content string, blocks []map[string]any, err error) {
 	if v == nil {
 		return "", nil, nil
 	}

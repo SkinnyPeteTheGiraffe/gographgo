@@ -11,6 +11,11 @@ import (
 	"strings"
 )
 
+const (
+	dockerBinary        = "docker"
+	dockerComposeBinary = "docker-compose"
+)
+
 type commandRunner func(ctx context.Context, stdout, stderr io.Writer, name string, args []string, env map[string]string) error
 
 type stringSliceFlag []string
@@ -106,22 +111,22 @@ func upWithRunner(ctx context.Context, stdout, stderr io.Writer, opts UpOptions,
 	return runner(ctx, stdout, stderr, cmdName, args, env)
 }
 
-func detectComposeCommand(preferred string) (string, []string, error) {
+func detectComposeCommand(preferred string) (cmd string, prefix []string, err error) {
 	want := strings.TrimSpace(preferred)
 	if want != "" {
-		if want == "docker-compose" {
-			return "docker-compose", nil, nil
+		if want == dockerComposeBinary {
+			return dockerComposeBinary, nil, nil
 		}
-		if want == "docker" {
-			return "docker", []string{"compose"}, nil
+		if want == dockerBinary {
+			return dockerBinary, []string{"compose"}, nil
 		}
 		return "", nil, fmt.Errorf("unsupported compose binary %q", want)
 	}
-	if _, err := exec.LookPath("docker"); err == nil {
-		return "docker", []string{"compose"}, nil
+	if _, err := exec.LookPath(dockerBinary); err == nil {
+		return dockerBinary, []string{"compose"}, nil
 	}
-	if _, err := exec.LookPath("docker-compose"); err == nil {
-		return "docker-compose", nil, nil
+	if _, err := exec.LookPath(dockerComposeBinary); err == nil {
+		return dockerComposeBinary, nil, nil
 	}
 	return "", nil, fmt.Errorf("docker compose is required but was not found")
 }
@@ -132,9 +137,9 @@ type BuildOptions struct {
 	Tag         string
 	Dockerfile  string
 	ContextPath string
+	BuildArgs   []string
 	Pull        bool
 	NoCache     bool
-	BuildArgs   []string
 }
 
 // Build builds a container image for the local server runtime.
@@ -271,12 +276,12 @@ func Dockerfile(_ context.Context, stdout io.Writer, opts DockerfileOptions) err
 	if _, err := os.Stat(outputPath); err == nil && !opts.Overwrite {
 		return fmt.Errorf("file already exists at %s (pass --overwrite to replace)", outputPath)
 	}
-	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0o750); err != nil {
 		return err
 	}
 
 	content := renderDockerfile(builderImage, baseImage, cfg.DockerfileLines)
-	if err := os.WriteFile(outputPath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(outputPath, []byte(content), 0o600); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(stdout, "wrote %s\n", outputPath)

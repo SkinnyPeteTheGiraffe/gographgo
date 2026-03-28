@@ -3,13 +3,16 @@ package cli
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Template describes a project bootstrap template.
@@ -41,8 +44,16 @@ var templates = map[string]Template{
 	},
 }
 
-var httpGet = func(url string) (*http.Response, error) {
-	return http.Get(url)
+const (
+	templateDirPerm         = 0o750
+	templateFilePerm        = 0o600
+	maxTemplateArchiveBytes = 32 << 20
+	maxTemplateExtractBytes = 64 << 20
+	templateDownloadTimeout = 30 * time.Second
+)
+
+var httpGet = func(req *http.Request) (*http.Response, error) {
+	return http.DefaultClient.Do(req)
 }
 
 // CreateNew creates a new project directory from a remote template.
@@ -63,7 +74,13 @@ func CreateNew(path, templateID string, stdout io.Writer) error {
 		return err
 	}
 
-	resp, err := httpGet(t.URL)
+	downloadCtx, cancel := context.WithTimeout(context.Background(), templateDownloadTimeout)
+	defer cancel()
+	req, err := newTemplateRequest(downloadCtx, t.URL)
+	if err != nil {
+		return err
+	}
+	resp, err := httpGet(req)
 	if err != nil {
 		return fmt.Errorf("download template: %w", err)
 	}
@@ -72,9 +89,12 @@ func CreateNew(path, templateID string, stdout io.Writer) error {
 		return fmt.Errorf("download template: unexpected status %s", resp.Status)
 	}
 
-	b, err := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxTemplateArchiveBytes+1))
 	if err != nil {
 		return fmt.Errorf("read template archive: %w", err)
+	}
+	if len(b) > maxTemplateArchiveBytes {
+		return fmt.Errorf("template archive exceeds %d bytes", maxTemplateArchiveBytes)
 	}
 	if err := unzipInto(bytes.NewReader(b), int64(len(b)), abs); err != nil {
 		return err
@@ -124,7 +144,7 @@ func ensureEmptyDir(path string) error {
 	if !os.IsNotExist(err) {
 		return err
 	}
-	return os.MkdirAll(path, 0o755)
+	return os.MkdirAll(path, templateDirPerm)
 }
 
 func unzipInto(r io.ReaderAt, size int64, dest string) error {
@@ -132,45 +152,75 @@ func unzipInto(r io.ReaderAt, size int64, dest string) error {
 	if err != nil {
 		return fmt.Errorf("open zip: %w", err)
 	}
+	var extractedBytes int64
 	rootPrefix := detectArchiveRoot(zr)
 	for _, f := range zr.File {
-		rel := strings.TrimPrefix(f.Name, rootPrefix)
-		rel = strings.TrimPrefix(rel, "/")
-		if rel == "" {
-			continue
-		}
-		target := filepath.Join(dest, filepath.FromSlash(rel))
-		if !strings.HasPrefix(target, dest+string(os.PathSeparator)) && target != dest {
-			return fmt.Errorf("invalid archive entry: %s", f.Name)
-		}
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				return err
+		entrySize, processErr := extractTemplateEntry(f, dest, rootPrefix, extractedBytes)
+		if processErr != nil {
+			if processErr == errSkipTemplateEntry {
+				continue
 			}
-			continue
+			return processErr
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return err
-		}
-		func() {
-			defer func() { _ = rc.Close() }()
-			out, createErr := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-			if createErr != nil {
-				err = createErr
-				return
-			}
-			defer func() { _ = out.Close() }()
-			_, err = io.Copy(out, rc)
-		}()
-		if err != nil {
-			return err
-		}
+		extractedBytes += entrySize
 	}
 	return nil
+}
+
+var errSkipTemplateEntry = fmt.Errorf("skip template entry")
+
+func extractTemplateEntry(f *zip.File, dest, rootPrefix string, extractedBytes int64) (int64, error) {
+	rel := strings.TrimPrefix(f.Name, rootPrefix)
+	rel = strings.TrimPrefix(rel, "/")
+	if rel == "" {
+		return 0, errSkipTemplateEntry
+	}
+	target := filepath.Join(dest, filepath.FromSlash(rel))
+	if !strings.HasPrefix(target, dest+string(os.PathSeparator)) && target != dest {
+		return 0, fmt.Errorf("invalid archive entry: %s", f.Name)
+	}
+	if f.FileInfo().IsDir() {
+		if err := os.MkdirAll(target, templateDirPerm); err != nil {
+			return 0, err
+		}
+		return 0, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), templateDirPerm); err != nil {
+		return 0, err
+	}
+	entrySize := int64(f.UncompressedSize64)
+	if err := validateTemplateEntrySize(f.Name, entrySize, extractedBytes); err != nil {
+		return 0, err
+	}
+	if err := copyTemplateEntryFile(f, target, entrySize); err != nil {
+		return 0, err
+	}
+	return entrySize, nil
+}
+
+func validateTemplateEntrySize(name string, entrySize, extractedBytes int64) error {
+	if entrySize > maxTemplateExtractBytes {
+		return fmt.Errorf("archive entry too large: %s", name)
+	}
+	if extractedBytes+entrySize > maxTemplateExtractBytes {
+		return fmt.Errorf("template archive extracted size exceeds %d bytes", maxTemplateExtractBytes)
+	}
+	return nil
+}
+
+func copyTemplateEntryFile(f *zip.File, target string, entrySize int64) error {
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rc.Close() }()
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, templateFilePerm)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	_, err = io.CopyN(out, rc, entrySize)
+	return err
 }
 
 func detectArchiveRoot(zr *zip.Reader) string {
@@ -196,4 +246,22 @@ func detectArchiveRoot(zr *zip.Reader) string {
 		return ""
 	}
 	return prefix + "/"
+}
+
+func newTemplateRequest(ctx context.Context, rawURL string) (*http.Request, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return nil, fmt.Errorf("invalid template URL: %w", err)
+	}
+	if !parsed.IsAbs() || parsed.Scheme != "https" {
+		return nil, fmt.Errorf("template URL must be https: %q", rawURL)
+	}
+	if !strings.EqualFold(parsed.Hostname(), "github.com") {
+		return nil, fmt.Errorf("template host not allowed: %q", parsed.Hostname())
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("build template request: %w", err)
+	}
+	return req, nil
 }

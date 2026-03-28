@@ -8,9 +8,9 @@ import (
 
 // Thread represents a conversation/session container.
 type Thread struct {
-	ID        string         `json:"thread_id"`
 	CreatedAt time.Time      `json:"created_at"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+	ID        string         `json:"thread_id"`
 }
 
 // RunStatus is the status of a run lifecycle.
@@ -27,49 +27,49 @@ const (
 
 // Run is an execution record within a thread.
 type Run struct {
+	CreatedAt   time.Time      `json:"created_at"`
+	StartedAt   *time.Time     `json:"started_at,omitempty"`
+	EndedAt     *time.Time     `json:"ended_at,omitempty"`
+	Input       map[string]any `json:"input,omitempty"`
+	Output      map[string]any `json:"output,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
 	ID          string         `json:"run_id"`
 	ThreadID    string         `json:"thread_id"`
 	AssistantID string         `json:"assistant_id,omitempty"`
 	Status      RunStatus      `json:"status"`
-	Input       map[string]any `json:"input,omitempty"`
-	Output      map[string]any `json:"output,omitempty"`
 	Error       string         `json:"error,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
-	CreatedAt   time.Time      `json:"created_at"`
-	StartedAt   *time.Time     `json:"started_at,omitempty"`
-	EndedAt     *time.Time     `json:"ended_at,omitempty"`
 }
 
 // RunEvent represents a streamable run event.
 type RunEvent struct {
+	Timestamp time.Time      `json:"timestamp"`
+	Payload   map[string]any `json:"payload,omitempty"`
 	Type      string         `json:"type"`
 	ThreadID  string         `json:"thread_id"`
 	RunID     string         `json:"run_id"`
-	Timestamp time.Time      `json:"timestamp"`
-	Payload   map[string]any `json:"payload,omitempty"`
 }
 
 // ThreadState is the current state view for a thread.
 type ThreadState struct {
-	ThreadID     string         `json:"thread_id"`
-	CheckpointID string         `json:"checkpoint_id,omitempty"`
 	Values       map[string]any `json:"values,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
-	CreatedAt    *time.Time     `json:"created_at,omitempty"`
 	ParentConfig map[string]any `json:"parent_checkpoint,omitempty"`
+	CreatedAt    *time.Time     `json:"created_at,omitempty"`
+	ThreadID     string         `json:"thread_id"`
+	CheckpointID string         `json:"checkpoint_id,omitempty"`
 }
 
 // Info exposes server capability metadata.
 type Info struct {
-	Version      string         `json:"version"`
 	Capabilities map[string]any `json:"capabilities"`
+	Version      string         `json:"version"`
 }
 
 // StoreValue represents a value in the thread-level key-value store.
 type StoreValue struct {
+	Value     map[string]any `json:"value"`
 	Namespace string         `json:"namespace"`
 	Key       string         `json:"key"`
-	Value     map[string]any `json:"value"`
 }
 
 // StreamMode defines stream-mode names used by run/thread streaming APIs.
@@ -105,11 +105,11 @@ type StreamPartV2 interface {
 // ValuesStreamPart is emitted for stream mode `values`.
 type ValuesStreamPart struct {
 	Type       string           `json:"type"`
+	Event      string           `json:"event,omitempty"`
+	ID         string           `json:"id,omitempty"`
 	NS         []string         `json:"ns"`
 	Data       map[string]any   `json:"data"`
 	Interrupts []map[string]any `json:"interrupts"`
-	Event      string           `json:"event,omitempty"`
-	ID         string           `json:"id,omitempty"`
 }
 
 func (ValuesStreamPart) streamPartV2() {}
@@ -117,11 +117,11 @@ func (ValuesStreamPart) streamPartV2() {}
 // UpdatesStreamPart is emitted for stream mode `updates`.
 type UpdatesStreamPart struct {
 	Type       string           `json:"type"`
+	Event      string           `json:"event,omitempty"`
+	ID         string           `json:"id,omitempty"`
 	NS         []string         `json:"ns"`
 	Data       map[string]any   `json:"data"`
 	Interrupts []map[string]any `json:"interrupts"`
-	Event      string           `json:"event,omitempty"`
-	ID         string           `json:"id,omitempty"`
 }
 
 func (UpdatesStreamPart) streamPartV2() {}
@@ -130,10 +130,10 @@ func (UpdatesStreamPart) streamPartV2() {}
 type MessagesStreamPart struct {
 	Type       string           `json:"type"`
 	NS         []string         `json:"ns"`
-	Data       any              `json:"data"`
-	Interrupts []map[string]any `json:"interrupts"`
 	Event      string           `json:"event,omitempty"`
 	ID         string           `json:"id,omitempty"`
+	Data       any              `json:"data"`
+	Interrupts []map[string]any `json:"interrupts"`
 }
 
 func (MessagesStreamPart) streamPartV2() {}
@@ -142,10 +142,10 @@ func (MessagesStreamPart) streamPartV2() {}
 type CustomStreamPart struct {
 	Type       string           `json:"type"`
 	NS         []string         `json:"ns"`
-	Data       any              `json:"data"`
-	Interrupts []map[string]any `json:"interrupts"`
 	Event      string           `json:"event,omitempty"`
 	ID         string           `json:"id,omitempty"`
+	Data       any              `json:"data"`
+	Interrupts []map[string]any `json:"interrupts"`
 }
 
 func (CustomStreamPart) streamPartV2() {}
@@ -153,11 +153,11 @@ func (CustomStreamPart) streamPartV2() {}
 // CheckpointStreamPart is emitted for stream mode `checkpoints`.
 type CheckpointStreamPart struct {
 	Type       string           `json:"type"`
+	Event      string           `json:"event,omitempty"`
+	ID         string           `json:"id,omitempty"`
 	NS         []string         `json:"ns"`
 	Data       map[string]any   `json:"data"`
 	Interrupts []map[string]any `json:"interrupts"`
-	Event      string           `json:"event,omitempty"`
-	ID         string           `json:"id,omitempty"`
 }
 
 func (CheckpointStreamPart) streamPartV2() {}
@@ -165,11 +165,11 @@ func (CheckpointStreamPart) streamPartV2() {}
 // TasksStreamPart is emitted for stream mode `tasks`.
 type TasksStreamPart struct {
 	Type       string           `json:"type"`
+	Event      string           `json:"event,omitempty"`
+	ID         string           `json:"id,omitempty"`
 	NS         []string         `json:"ns"`
 	Data       map[string]any   `json:"data"`
 	Interrupts []map[string]any `json:"interrupts"`
-	Event      string           `json:"event,omitempty"`
-	ID         string           `json:"id,omitempty"`
 }
 
 func (TasksStreamPart) streamPartV2() {}
@@ -177,11 +177,11 @@ func (TasksStreamPart) streamPartV2() {}
 // DebugStreamPart is emitted for stream mode `debug`.
 type DebugStreamPart struct {
 	Type       string           `json:"type"`
+	Event      string           `json:"event,omitempty"`
+	ID         string           `json:"id,omitempty"`
 	NS         []string         `json:"ns"`
 	Data       map[string]any   `json:"data"`
 	Interrupts []map[string]any `json:"interrupts"`
-	Event      string           `json:"event,omitempty"`
-	ID         string           `json:"id,omitempty"`
 }
 
 func (DebugStreamPart) streamPartV2() {}
@@ -189,11 +189,11 @@ func (DebugStreamPart) streamPartV2() {}
 // MetadataStreamPart is emitted for stream control metadata events.
 type MetadataStreamPart struct {
 	Type       string           `json:"type"`
+	Event      string           `json:"event,omitempty"`
+	ID         string           `json:"id,omitempty"`
 	NS         []string         `json:"ns"`
 	Data       map[string]any   `json:"data"`
 	Interrupts []map[string]any `json:"interrupts"`
-	Event      string           `json:"event,omitempty"`
-	ID         string           `json:"id,omitempty"`
 }
 
 func (MetadataStreamPart) streamPartV2() {}
@@ -202,10 +202,10 @@ func (MetadataStreamPart) streamPartV2() {}
 type UnknownStreamPart struct {
 	Type       string           `json:"type"`
 	NS         []string         `json:"ns"`
-	Data       any              `json:"data"`
-	Interrupts []map[string]any `json:"interrupts"`
 	Event      string           `json:"event,omitempty"`
 	ID         string           `json:"id,omitempty"`
+	Data       any              `json:"data"`
+	Interrupts []map[string]any `json:"interrupts"`
 }
 
 func (UnknownStreamPart) streamPartV2() {}
@@ -223,10 +223,10 @@ const (
 // ThreadCreateRequest creates a thread.
 type ThreadCreateRequest struct {
 	ThreadID   string         `json:"thread_id,omitempty"`
-	Metadata   map[string]any `json:"metadata,omitempty"`
 	IfExists   string         `json:"if_exists,omitempty"`
-	Supersteps []any          `json:"supersteps,omitempty"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
 	TTL        any            `json:"ttl,omitempty"`
+	Supersteps []any          `json:"supersteps,omitempty"`
 }
 
 // ThreadUpdateRequest updates a thread.
@@ -239,14 +239,14 @@ type ThreadUpdateRequest struct {
 type ThreadSearchRequest struct {
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	Values    map[string]any `json:"values,omitempty"`
-	IDs       []string       `json:"ids,omitempty"`
+	Extract   map[string]any `json:"extract,omitempty"`
 	Status    ThreadStatus   `json:"status,omitempty"`
-	Limit     int            `json:"limit,omitempty"`
-	Offset    int            `json:"offset,omitempty"`
 	SortBy    string         `json:"sort_by,omitempty"`
 	SortOrder string         `json:"sort_order,omitempty"`
+	IDs       []string       `json:"ids,omitempty"`
 	Select    []string       `json:"select,omitempty"`
-	Extract   map[string]any `json:"extract,omitempty"`
+	Limit     int            `json:"limit,omitempty"`
+	Offset    int            `json:"offset,omitempty"`
 }
 
 // ThreadCountRequest counts threads by filter criteria.
@@ -258,8 +258,8 @@ type ThreadCountRequest struct {
 
 // ThreadPruneRequest prunes thread history.
 type ThreadPruneRequest struct {
-	ThreadIDs []string `json:"thread_ids"`
 	Strategy  string   `json:"strategy,omitempty"`
+	ThreadIDs []string `json:"thread_ids"`
 }
 
 // ThreadPruneResponse is the response from thread prune.
@@ -282,38 +282,38 @@ type ThreadUpdateStateResponse struct {
 
 // ThreadHistoryRequest queries thread history.
 type ThreadHistoryRequest struct {
-	Limit      int            `json:"limit,omitempty"`
 	Before     any            `json:"before,omitempty"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
 	Checkpoint map[string]any `json:"checkpoint,omitempty"`
+	Limit      int            `json:"limit,omitempty"`
 }
 
 // ThreadJoinStreamRequest configures thread stream joins.
 type ThreadJoinStreamRequest struct {
-	StreamMode  []string `json:"stream_mode,omitempty"`
 	LastEventID string   `json:"last_event_id,omitempty"`
+	StreamMode  []string `json:"stream_mode,omitempty"`
 }
 
 // RunCreateRequest creates a run.
 type RunCreateRequest struct {
-	AssistantID       string         `json:"assistant_id,omitempty"`
+	InterruptBefore   any            `json:"interrupt_before,omitempty"`
+	InterruptAfter    any            `json:"interrupt_after,omitempty"`
 	Input             map[string]any `json:"input,omitempty"`
 	Command           map[string]any `json:"command,omitempty"`
 	Metadata          map[string]any `json:"metadata,omitempty"`
 	Config            map[string]any `json:"config,omitempty"`
 	Context           map[string]any `json:"context,omitempty"`
-	StreamMode        []string       `json:"stream_mode,omitempty"`
-	StreamSubgraphs   bool           `json:"stream_subgraphs,omitempty"`
-	StreamResumable   bool           `json:"stream_resumable,omitempty"`
-	InterruptBefore   any            `json:"interrupt_before,omitempty"`
-	InterruptAfter    any            `json:"interrupt_after,omitempty"`
+	Checkpoint        map[string]any `json:"checkpoint,omitempty"`
+	AssistantID       string         `json:"assistant_id,omitempty"`
 	Webhook           string         `json:"webhook,omitempty"`
 	MultitaskStrategy string         `json:"multitask_strategy,omitempty"`
 	IfNotExists       string         `json:"if_not_exists,omitempty"`
-	AfterSeconds      int            `json:"after_seconds,omitempty"`
 	Durability        string         `json:"durability,omitempty"`
-	Checkpoint        map[string]any `json:"checkpoint,omitempty"`
 	CheckpointID      string         `json:"checkpoint_id,omitempty"`
+	StreamMode        []string       `json:"stream_mode,omitempty"`
+	AfterSeconds      int            `json:"after_seconds,omitempty"`
+	StreamSubgraphs   bool           `json:"stream_subgraphs,omitempty"`
+	StreamResumable   bool           `json:"stream_resumable,omitempty"`
 }
 
 // RunStreamRequest creates and streams a run.
@@ -321,44 +321,44 @@ type RunStreamRequest = RunCreateRequest
 
 // RunCancelOptions configures run cancellation.
 type RunCancelOptions struct {
-	Wait   bool
 	Action string
+	Wait   bool
 }
 
 // RunCancelManyRequest configures bulk run cancellation.
 type RunCancelManyRequest struct {
 	ThreadID string
-	RunIDs   []string
 	Status   string
 	Action   string
+	RunIDs   []string
 }
 
 // RunJoinStreamRequest configures join stream behavior.
 type RunJoinStreamRequest struct {
-	CancelOnDisconnect bool
-	StreamMode         []string
 	LastEventID        string
+	StreamMode         []string
+	CancelOnDisconnect bool
 }
 
 // Assistant represents an assistant resource.
 type Assistant struct {
-	ID          string         `json:"assistant_id"`
-	GraphID     string         `json:"graph_id,omitempty"`
-	Name        string         `json:"name,omitempty"`
-	Description string         `json:"description,omitempty"`
 	Config      map[string]any `json:"config,omitempty"`
 	Context     map[string]any `json:"context,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
+	ID          string         `json:"assistant_id"`
+	GraphID     string         `json:"graph_id,omitempty"`
+	Name        string         `json:"name,omitempty"`
+	Description string         `json:"description,omitempty"`
 }
 
 // AssistantCreateRequest creates an assistant.
 type AssistantCreateRequest struct {
-	GraphID     string         `json:"graph_id,omitempty"`
 	Config      map[string]any `json:"config,omitempty"`
 	Context     map[string]any `json:"context,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
+	GraphID     string         `json:"graph_id,omitempty"`
 	AssistantID string         `json:"assistant_id,omitempty"`
 	IfExists    string         `json:"if_exists,omitempty"`
 	Name        string         `json:"name,omitempty"`
@@ -367,10 +367,10 @@ type AssistantCreateRequest struct {
 
 // AssistantUpdateRequest updates an assistant.
 type AssistantUpdateRequest struct {
-	GraphID     string         `json:"graph_id,omitempty"`
 	Config      map[string]any `json:"config,omitempty"`
 	Context     map[string]any `json:"context,omitempty"`
 	Metadata    map[string]any `json:"metadata,omitempty"`
+	GraphID     string         `json:"graph_id,omitempty"`
 	Name        string         `json:"name,omitempty"`
 	Description string         `json:"description,omitempty"`
 }
@@ -380,16 +380,16 @@ type AssistantSearchRequest struct {
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	GraphID   string         `json:"graph_id,omitempty"`
 	Name      string         `json:"name,omitempty"`
-	Limit     int            `json:"limit,omitempty"`
-	Offset    int            `json:"offset,omitempty"`
 	SortBy    string         `json:"sort_by,omitempty"`
 	SortOrder string         `json:"sort_order,omitempty"`
 	Select    []string       `json:"select,omitempty"`
+	Limit     int            `json:"limit,omitempty"`
+	Offset    int            `json:"offset,omitempty"`
 }
 
 type AssistantSearchResponse struct {
-	Assistants []Assistant `json:"assistants"`
 	Next       string      `json:"next,omitempty"`
+	Assistants []Assistant `json:"assistants"`
 }
 
 // AssistantCountRequest counts assistants.
@@ -401,9 +401,9 @@ type AssistantCountRequest struct {
 
 // AssistantVersion describes an assistant version.
 type AssistantVersion struct {
-	Version   int            `json:"version"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
+	Version   int            `json:"version"`
 }
 
 // AssistantVersionRequest queries assistant versions.
@@ -418,35 +418,35 @@ type Cron struct {
 	ID          string         `json:"cron_id"`
 	AssistantID string         `json:"assistant_id,omitempty"`
 	ThreadID    string         `json:"thread_id,omitempty"`
-	Schedule    string         `json:"schedule,omitempty"`
 	Payload     map[string]any `json:"payload,omitempty"`
-	Enabled     bool           `json:"enabled,omitempty"`
 	NextRunDate *time.Time     `json:"next_run_date,omitempty"`
 	EndTime     *time.Time     `json:"end_time,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
+	Schedule    string         `json:"schedule,omitempty"`
+	Enabled     bool           `json:"enabled,omitempty"`
 }
 
 // CronCreateRequest creates a cron schedule.
 type CronCreateRequest struct {
 	AssistantID       string         `json:"assistant_id,omitempty"`
 	Schedule          string         `json:"schedule,omitempty"`
+	Webhook           string         `json:"webhook,omitempty"`
+	OnRunCompleted    string         `json:"on_run_completed,omitempty"`
+	MultitaskStrategy string         `json:"multitask_strategy,omitempty"`
+	Timezone          string         `json:"timezone,omitempty"`
+	Durability        string         `json:"durability,omitempty"`
 	Input             map[string]any `json:"input,omitempty"`
 	Metadata          map[string]any `json:"metadata,omitempty"`
 	Config            map[string]any `json:"config,omitempty"`
 	Context           map[string]any `json:"context,omitempty"`
 	InterruptBefore   any            `json:"interrupt_before,omitempty"`
 	InterruptAfter    any            `json:"interrupt_after,omitempty"`
-	Webhook           string         `json:"webhook,omitempty"`
-	OnRunCompleted    string         `json:"on_run_completed,omitempty"`
-	MultitaskStrategy string         `json:"multitask_strategy,omitempty"`
 	EndTime           *time.Time     `json:"end_time,omitempty"`
 	Enabled           *bool          `json:"enabled,omitempty"`
-	Timezone          string         `json:"timezone,omitempty"`
-	StreamMode        []string       `json:"stream_mode,omitempty"`
 	StreamSubgraphs   *bool          `json:"stream_subgraphs,omitempty"`
 	StreamResumable   *bool          `json:"stream_resumable,omitempty"`
-	Durability        string         `json:"durability,omitempty"`
+	StreamMode        []string       `json:"stream_mode,omitempty"`
 }
 
 // CronUpdateRequest updates a cron schedule.
@@ -456,12 +456,12 @@ type CronUpdateRequest = CronCreateRequest
 type CronSearchRequest struct {
 	AssistantID string   `json:"assistant_id,omitempty"`
 	ThreadID    string   `json:"thread_id,omitempty"`
-	Enabled     *bool    `json:"enabled,omitempty"`
-	Limit       int      `json:"limit,omitempty"`
-	Offset      int      `json:"offset,omitempty"`
 	SortBy      string   `json:"sort_by,omitempty"`
 	SortOrder   string   `json:"sort_order,omitempty"`
+	Enabled     *bool    `json:"enabled,omitempty"`
 	Select      []string `json:"select,omitempty"`
+	Limit       int      `json:"limit,omitempty"`
+	Offset      int      `json:"offset,omitempty"`
 }
 
 // CronCountRequest counts cron schedules.
@@ -472,31 +472,31 @@ type CronCountRequest struct {
 
 // StoreItem is a global store item.
 type StoreItem struct {
-	Namespace []string       `json:"namespace"`
-	Key       string         `json:"key"`
 	Value     map[string]any `json:"value"`
 	Score     *float64       `json:"score,omitempty"`
 	CreatedAt *time.Time     `json:"created_at,omitempty"`
 	UpdatedAt *time.Time     `json:"updated_at,omitempty"`
+	Key       string         `json:"key"`
+	Namespace []string       `json:"namespace"`
 }
 
 // StoreItemPutRequest creates or updates a global store item.
 type StoreItemPutRequest struct {
-	Namespace []string       `json:"namespace"`
-	Key       string         `json:"key"`
-	Value     map[string]any `json:"value"`
 	Index     any            `json:"index,omitempty"`
+	Value     map[string]any `json:"value"`
 	TTL       *int           `json:"ttl,omitempty"`
+	Key       string         `json:"key"`
+	Namespace []string       `json:"namespace"`
 }
 
 // StoreSearchRequest searches the global store.
 type StoreSearchRequest struct {
-	NamespacePrefix []string       `json:"namespace_prefix"`
 	Filter          map[string]any `json:"filter,omitempty"`
+	RefreshTTL      *bool          `json:"refresh_ttl,omitempty"`
+	Query           string         `json:"query,omitempty"`
+	NamespacePrefix []string       `json:"namespace_prefix"`
 	Limit           int            `json:"limit,omitempty"`
 	Offset          int            `json:"offset,omitempty"`
-	Query           string         `json:"query,omitempty"`
-	RefreshTTL      *bool          `json:"refresh_ttl,omitempty"`
 }
 
 // StoreSearchResponse is a global store search response.
@@ -506,9 +506,9 @@ type StoreSearchResponse struct {
 
 // StoreNamespaceListRequest lists store namespaces.
 type StoreNamespaceListRequest struct {
+	MaxDepth *int     `json:"max_depth,omitempty"`
 	Prefix   []string `json:"prefix,omitempty"`
 	Suffix   []string `json:"suffix,omitempty"`
-	MaxDepth *int     `json:"max_depth,omitempty"`
 	Limit    int      `json:"limit,omitempty"`
 	Offset   int      `json:"offset,omitempty"`
 }

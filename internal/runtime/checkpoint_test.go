@@ -20,7 +20,7 @@ func TestCreateCheckpoint_OnlyPersistsAvailableChannels(t *testing.T) {
 	ch1 := graph.NewLastValue()
 	ch2 := graph.NewLastValue()
 
-	ch1.Update([]graph.Dynamic{graph.Dyn("hello")}) //nolint:errcheck
+	ch1.Update([]graph.Dynamic{graph.Dyn("hello")}) //nolint:errcheck // test setup value; error path is not under test here
 
 	channels := map[string]graph.Channel{
 		"key1": ch1,

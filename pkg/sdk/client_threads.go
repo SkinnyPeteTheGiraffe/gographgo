@@ -113,7 +113,7 @@ func (tc *ThreadsClient) GetHistory(ctx context.Context, threadID string, req Th
 }
 
 // JoinStream streams thread-level events.
-func (tc *ThreadsClient) JoinStream(ctx context.Context, threadID string, req ThreadJoinStreamRequest) (<-chan StreamPart, <-chan error) {
+func (tc *ThreadsClient) JoinStream(ctx context.Context, threadID string, req ThreadJoinStreamRequest) (parts <-chan StreamPart, errs <-chan error) {
 	p, err := withQuery(
 		"/v1/threads/"+threadID+"/stream",
 		map[string]any{"stream_mode": req.StreamMode},
@@ -135,7 +135,7 @@ func (tc *ThreadsClient) JoinStreamTyped(
 	ctx context.Context,
 	threadID string,
 	req ThreadJoinStreamRequest,
-) (<-chan StreamPartV2, <-chan error) {
+) (parts <-chan StreamPartV2, errs <-chan error) {
 	p, err := withQuery(
 		"/v1/threads/"+threadID+"/stream",
 		map[string]any{"stream_mode": req.StreamMode},

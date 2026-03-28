@@ -37,6 +37,13 @@ func TestLoadServerBootstrapSQLiteAndAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadServerBootstrap() error = %v", err)
 	}
+	if closer, ok := bootstrap.Checkpointer.(interface{ Close() error }); ok {
+		t.Cleanup(func() {
+			if closeErr := closer.Close(); closeErr != nil {
+				t.Fatalf("checkpointer close error = %v", closeErr)
+			}
+		})
+	}
 	if bootstrap.APIKey != "secret" {
 		t.Fatalf("api key = %q, want secret", bootstrap.APIKey)
 	}

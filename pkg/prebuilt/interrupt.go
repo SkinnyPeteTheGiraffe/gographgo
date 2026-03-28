@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/graph"
+
 	"github.com/google/uuid"
 )
 
@@ -20,15 +21,15 @@ type HumanInterruptConfig struct {
 
 // ActionRequest is a request for human action.
 type ActionRequest struct {
-	Action string         `json:"action"`
 	Args   map[string]any `json:"args"`
+	Action string         `json:"action"`
 }
 
 // HumanInterrupt is an interrupt payload requesting human intervention.
 type HumanInterrupt struct {
+	Description   string               `json:"description,omitempty"`
 	ActionRequest ActionRequest        `json:"action_request"`
 	Config        HumanInterruptConfig `json:"config"`
-	Description   string               `json:"description,omitempty"`
 }
 
 // Interrupt pauses graph execution from inside tools or hooks.
@@ -72,8 +73,8 @@ func (HumanResponseActionRequest) humanResponseArgs() {}
 
 // HumanResponse is the response payload supplied when resuming.
 type HumanResponse struct {
-	Type HumanResponseType `json:"type"`
 	Args HumanResponseArgs `json:"args"`
+	Type HumanResponseType `json:"type"`
 }
 
 // AcceptHumanResponse creates an accept response.
@@ -98,8 +99,8 @@ func EditHumanResponse(request ActionRequest) HumanResponse {
 
 func (r HumanResponse) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Type HumanResponseType `json:"type"`
 		Args any               `json:"args,omitempty"`
+		Type HumanResponseType `json:"type"`
 	}
 	out := wire{Type: r.Type}
 	switch v := r.Args.(type) {

@@ -46,26 +46,8 @@ func commandResult(cmd *Command) (writes []pregelWrite, sendTargets []Send, resu
 		return
 	}
 
-	// Extract state update writes.
-	if len(cmd.Update) > 0 {
-		for k, v := range cmd.Update {
-			writes = append(writes, pregelWrite{channel: k, value: v.Value()})
-		}
-	}
-
-	// Extract Goto routing targets.
-	for _, n := range cmd.Goto.Nodes {
-		if n == "" || n == End {
-			continue
-		}
-		sendTargets = append(sendTargets, Send{Node: n, Arg: Dyn(unwrapCommandUpdate(cmd.Update))})
-	}
-	for _, s := range cmd.Goto.Sends {
-		if s.Node == "" || s.Node == End {
-			continue
-		}
-		sendTargets = append(sendTargets, s)
-	}
+	writes = commandWrites(cmd.Update)
+	sendTargets = commandSendTargets(cmd)
 
 	// Extract resume payload.
 	rm, rv, err := normalizeCommandResume(cmd.Resume)
@@ -83,6 +65,38 @@ func commandResult(cmd *Command) (writes []pregelWrite, sendTargets []Send, resu
 		resumeValues = append(resumeValues, value.Value())
 	}
 	return
+}
+
+func commandWrites(update map[string]Dynamic) []pregelWrite {
+	if len(update) == 0 {
+		return nil
+	}
+	writes := make([]pregelWrite, 0, len(update))
+	for k, v := range update {
+		writes = append(writes, pregelWrite{channel: k, value: v.Value()})
+	}
+	return writes
+}
+
+func commandSendTargets(cmd *Command) []Send {
+	if cmd == nil {
+		return nil
+	}
+	updates := Dyn(unwrapCommandUpdate(cmd.Update))
+	targets := make([]Send, 0, len(cmd.Goto.Nodes)+len(cmd.Goto.Sends))
+	for _, n := range cmd.Goto.Nodes {
+		if n == "" || n == End {
+			continue
+		}
+		targets = append(targets, Send{Node: n, Arg: updates})
+	}
+	for _, s := range cmd.Goto.Sends {
+		if s.Node == "" || s.Node == End {
+			continue
+		}
+		targets = append(targets, s)
+	}
+	return targets
 }
 
 func unwrapCommandUpdate(update map[string]Dynamic) map[string]any {

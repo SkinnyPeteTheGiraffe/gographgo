@@ -5,9 +5,6 @@
     "CheckpointNS": ""
   },
   "Checkpoint": {
-    "V": 1,
-    "ID": "cp-003",
-    "TS": "2026-03-22T00:00:03Z",
     "ChannelValues": {
       "counter": 3,
       "messages": [
@@ -26,15 +23,18 @@
         "messages": 3
       }
     },
+    "ID": "cp-003",
+    "TS": "2026-03-22T00:00:03Z",
     "PendingSends": [
       "send-3"
-    ]
+    ],
+    "V": 1
   },
   "Metadata": {
-    "Source": "loop",
-    "Step": 1,
     "Parents": null,
-    "RunID": "run-123"
+    "Source": "loop",
+    "RunID": "run-123",
+    "Step": 1
   },
   "ParentConfig": {
     "ThreadID": "thread-golden",
@@ -43,11 +43,11 @@
   },
   "PendingWrites": [
     {
-      "TaskID": "task-1",
-      "Channel": "messages",
       "Value": {
         "delta": "ok"
-      }
+      },
+      "TaskID": "task-1",
+      "Channel": "messages"
     }
   ]
 }

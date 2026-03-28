@@ -10,6 +10,10 @@ import (
 
 // RetryPolicy configures retry behavior for nodes.
 type RetryPolicy struct {
+	// RetryOn specifies which errors should trigger a retry.
+	// Can be a list of error types or a custom function.
+	RetryOn func(error) bool
+
 	// InitialInterval is the time to wait before the first retry.
 	InitialInterval time.Duration
 
@@ -24,10 +28,6 @@ type RetryPolicy struct {
 
 	// Jitter enables random jitter between retries.
 	Jitter bool
-
-	// RetryOn specifies which errors should trigger a retry.
-	// Can be a list of error types or a custom function.
-	RetryOn func(error) bool
 }
 
 // DefaultRetryPolicy returns a default retry policy.
@@ -132,31 +132,31 @@ const CommandParent = "__parent__"
 
 // Send represents a message to send to a specific node.
 type Send struct {
-	// Node is the name of the target node.
-	Node string
-
 	// Arg is the state or message to send.
 	Arg Dynamic
+
+	// Node is the name of the target node.
+	Node string
 }
 
 // Call is a functional PUSH task packet dispatched through the Pregel TASKS
 // channel. Unlike Send, Call executes the provided function directly instead of
 // routing to a named graph node.
 type Call struct {
-	// Name identifies this call in task metadata and stream events.
-	Name string
-
 	// Fn is the function executed for the call task.
 	Fn func(ctx context.Context, input Dynamic) (NodeResult, error)
+
+	// CachePolicy configures call-level caching.
+	CachePolicy *CachePolicy
 
 	// Arg is the call input payload.
 	Arg Dynamic
 
+	// Name identifies this call in task metadata and stream events.
+	Name string
+
 	// RetryPolicy configures call-level retries.
 	RetryPolicy []RetryPolicy
-
-	// CachePolicy configures call-level caching.
-	CachePolicy *CachePolicy
 }
 
 // Route is a typed routing result used by conditional edges.
@@ -278,26 +278,13 @@ type StateSnapshot struct {
 
 // PregelTask represents a task in the Pregel execution model.
 type PregelTask struct {
-	// ID is the unique task identifier.
-	ID string
-
-	// Name is the node name.
-	Name string
-
-	// Path is the execution path.
-	Path []any
-
-	// Error is set if the task failed.
-	Error error
-
-	// Interrupts contains any interrupts.
+	Error      error
+	State      any
+	Result     any
+	ID         string
+	Name       string
+	Path       []any
 	Interrupts []Interrupt
-
-	// State is the subgraph state.
-	State any
-
-	// Result is the task result.
-	Result any
 }
 
 // PregelExecutableTask represents an executable task.
@@ -332,14 +319,14 @@ type PregelExecutableTask struct {
 
 // CacheKey represents a cache key.
 type CacheKey struct {
-	// Namespace for the cache entry.
-	NS []string
+	// TTL is the time-to-live in seconds.
+	TTL *int
 
 	// Key for the cache entry.
 	Key string
 
-	// TTL is the time-to-live in seconds.
-	TTL *int
+	// Namespace for the cache entry.
+	NS []string
 }
 
 // StreamMode determines how the stream method emits outputs.
@@ -372,20 +359,20 @@ const (
 // If Err is non-nil, this part signals a terminal error and no further parts
 // will be emitted. All other fields are zero in that case.
 type StreamPart struct {
+	// Data is the stream data.
+	Data any
+
+	// Err is set on terminal stream errors. Callers must check this field.
+	Err error
+
 	// Type is the stream part type.
 	Type StreamMode
 
 	// Namespace is the graph namespace.
 	Namespace []string
 
-	// Data is the stream data.
-	Data any
-
 	// Interrupts contains any interrupts.
 	Interrupts []Interrupt
-
-	// Err is set on terminal stream errors. Callers must check this field.
-	Err error
 }
 
 // StreamEmit is an optional payload wrapper for StreamWriter calls.

@@ -15,22 +15,22 @@ import (
 // It provides Invoke and Stream methods for graph execution, backed by the
 // Pregel superstep runtime.
 type CompiledStateGraph[State, Context, Input, Output any] struct {
-	builder         *StateGraph[State, Context, Input, Output]
 	checkpointer    checkpoint.Saver
 	store           Store
 	cache           Cache
 	contextValue    any
-	interruptBefore []string
-	interruptAfter  []string
-	debug           bool
+	builder         *StateGraph[State, Context, Input, Output]
 	name            string
 	durability      DurabilityMode
+	interruptBefore []string
+	interruptAfter  []string
 	stepTimeout     time.Duration
 	maxConcurrency  int
+	debug           bool
 }
 
 // Invoke executes the graph with the given input and returns the final state.
-// It blocks until execution completes or ctx is cancelled.
+// It blocks until execution completes or ctx is canceled.
 func (g *CompiledStateGraph[State, Context, Input, Output]) Invoke(ctx context.Context, input Input) (GraphOutput, error) {
 	config := GetConfig(ctx)
 	config = g.mergeConfig(config)
@@ -437,19 +437,9 @@ func (g *CompiledStateGraph[State, Context, Input, Output]) BulkUpdateState(ctx 
 	}
 	current := *config
 	for i, superstep := range supersteps {
-		if len(superstep) == 0 {
-			return nil, fmt.Errorf("superstep %d has no updates", i)
-		}
-		updates := make(map[string]any)
-		for _, update := range superstep {
-			if update.AsNode != nil && *update.AsNode != "" {
-				if _, ok := g.builder.nodes[*update.AsNode]; !ok {
-					return nil, fmt.Errorf("superstep %d references unknown node %q", i, *update.AsNode)
-				}
-			}
-			for k, v := range update.Values {
-				updates[k] = v
-			}
+		updates, err := g.superstepUpdates(i, superstep)
+		if err != nil {
+			return nil, err
 		}
 		next, err := g.UpdateStateWithConfig(ctx, &current, updates)
 		if err != nil {
@@ -460,6 +450,32 @@ func (g *CompiledStateGraph[State, Context, Input, Output]) BulkUpdateState(ctx 
 		}
 	}
 	return &current, nil
+}
+
+func (g *CompiledStateGraph[State, Context, Input, Output]) superstepUpdates(index int, superstep []StateUpdate) (map[string]any, error) {
+	if len(superstep) == 0 {
+		return nil, fmt.Errorf("superstep %d has no updates", index)
+	}
+	updates := make(map[string]any)
+	for _, update := range superstep {
+		if err := g.validateStateUpdateNode(index, update); err != nil {
+			return nil, err
+		}
+		for k, v := range update.Values {
+			updates[k] = v
+		}
+	}
+	return updates, nil
+}
+
+func (g *CompiledStateGraph[State, Context, Input, Output]) validateStateUpdateNode(index int, update StateUpdate) error {
+	if update.AsNode == nil || *update.AsNode == "" {
+		return nil
+	}
+	if _, ok := g.builder.nodes[*update.AsNode]; ok {
+		return nil
+	}
+	return fmt.Errorf("superstep %d references unknown node %q", index, *update.AsNode)
 }
 
 func subgraphCheckpointNamespaceWithMode(parentNS, nodeName, taskID string, mode SubgraphPersistenceMode) string {

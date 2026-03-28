@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/graph"
@@ -205,6 +206,67 @@ func TestToolNode_Run_UnknownToolInterceptionOrder(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Status != "error" {
 		t.Fatalf("result = %+v, want unknown tool error message", got)
+	}
+}
+
+func TestToolNode_RunResults_PrefersToolCallResultWrapper(t *testing.T) {
+	var callWrapperUsed atomic.Bool
+	node := prebuilt.NewToolNode(
+		[]prebuilt.Tool{
+			prebuilt.NewToolFunc("echo", func(_ context.Context, args map[string]any) (any, error) {
+				return args["text"], nil
+			}),
+		},
+		prebuilt.WithToolCallWrapper(func(req prebuilt.ToolCallRequest, execute prebuilt.ToolCallExecutor) (prebuilt.ToolMessage, error) {
+			callWrapperUsed.Store(true)
+			return execute(req)
+		}),
+		prebuilt.WithToolCallResultWrapper(func(_ prebuilt.ToolCallRequest, _ prebuilt.ToolCallResultExecutor) (prebuilt.ToolCallResult, error) {
+			message := prebuilt.ToolMessage{
+				ToolCallID: "wrapped",
+				Name:       "echo",
+				Status:     "ok",
+				Content:    "result-wrapper",
+			}
+			return prebuilt.ToolCallResult{Message: &message}, nil
+		}),
+	)
+
+	results, err := node.RunResults(context.Background(), []prebuilt.ToolCall{{ID: "1", Name: "echo", Args: map[string]any{"text": "ignored"}}})
+	if err != nil {
+		t.Fatalf("RunResults: %v", err)
+	}
+	if callWrapperUsed.Load() {
+		t.Fatal("tool call wrapper should not run when a result wrapper is configured")
+	}
+	if len(results) != 1 || results[0].Message == nil || results[0].Message.Content != "result-wrapper" {
+		t.Fatalf("results = %#v", results)
+	}
+}
+
+func TestToolNode_RunResults_ToolCallWrapperRejectsCommandOutput(t *testing.T) {
+	node := prebuilt.NewToolNode(
+		[]prebuilt.Tool{
+			prebuilt.NewToolFuncWithRuntime("handoff", func(_ context.Context, _ map[string]any, runtime prebuilt.ToolRuntime) (any, error) {
+				return prebuilt.ToolCommand{
+					Update: map[string]any{
+						"messages": []prebuilt.Message{{Role: "tool", ToolCallID: runtime.ToolCallID, Content: "handoff ready"}},
+					},
+					Goto: graph.RouteTo("next"),
+				}, nil
+			}),
+		},
+		prebuilt.WithToolCallWrapper(func(req prebuilt.ToolCallRequest, execute prebuilt.ToolCallExecutor) (prebuilt.ToolMessage, error) {
+			return execute(req)
+		}),
+	)
+
+	_, err := node.RunResults(context.Background(), []prebuilt.ToolCall{{ID: "1", Name: "handoff"}})
+	if err == nil {
+		t.Fatal("expected wrapper/command compatibility error")
+	}
+	if !strings.Contains(err.Error(), "use WithToolCallResultWrapper") {
+		t.Fatalf("err = %v, want result wrapper guidance", err)
 	}
 }
 

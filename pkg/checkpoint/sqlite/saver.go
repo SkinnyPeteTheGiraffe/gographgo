@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -150,70 +151,29 @@ func (s *Saver) GetTuple(ctx context.Context, config *checkpoint.Config) (*check
 	}
 
 	ns := config.CheckpointNS
-	var (
-		row *sql.Row
-		id  string
-	)
-	if config.CheckpointID != "" {
-		id = config.CheckpointID
-		selectCols := "checkpoint_id, parent_checkpoint_id, checkpoint, metadata"
-		if s.hasCheckpointTypeCol {
-			selectCols = "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata"
-		}
-		row = s.db.QueryRowContext(ctx,
-			`SELECT `+selectCols+`
- FROM checkpoints
- WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ?`,
-			config.ThreadID, ns, config.CheckpointID,
-		)
-	} else {
-		selectCols := "checkpoint_id, parent_checkpoint_id, checkpoint, metadata"
-		if s.hasCheckpointTypeCol {
-			selectCols = "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata"
-		}
-		row = s.db.QueryRowContext(ctx,
-			`SELECT `+selectCols+`
- FROM checkpoints
- WHERE thread_id = ? AND checkpoint_ns = ?
- ORDER BY checkpoint_id DESC
- LIMIT 1`,
-			config.ThreadID, ns,
-		)
-	}
-
-	var (
-		checkpointID      string
-		parentCheckpoint  sql.NullString
-		checkpointType    sql.NullString
-		checkpointPayload []byte
-		metadataPayload   []byte
-	)
-	var scanErr error
-	if s.hasCheckpointTypeCol {
-		scanErr = row.Scan(&checkpointID, &parentCheckpoint, &checkpointType, &checkpointPayload, &metadataPayload)
-	} else {
-		scanErr = row.Scan(&checkpointID, &parentCheckpoint, &checkpointPayload, &metadataPayload)
-	}
+	requestedID := config.CheckpointID
+	row := s.checkpointRow(ctx, config.ThreadID, ns, requestedID)
+	loaded, scanErr := s.scanCheckpointRow(row)
 	if scanErr != nil {
 		if scanErr == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("checkpoint/sqlite: get checkpoint: %w", scanErr)
 	}
-	if id == "" {
-		id = checkpointID
+	if requestedID == "" {
+		requestedID = loaded.checkpointID
 	}
 
-	cp, err := s.decodeCheckpoint(checkpointType, checkpointPayload)
+	cp, err := s.decodeCheckpoint(loaded.checkpointType, loaded.checkpointPayload)
 	if err != nil {
 		return nil, err
 	}
-	meta, err := s.decodeMetadata(metadataPayload)
+	meta, err := s.decodeMetadata(loaded.metadataPayload)
 	if err != nil {
 		return nil, err
 	}
 
-	writes, err := s.loadWrites(ctx, config.ThreadID, ns, id)
+	writes, err := s.loadWrites(ctx, config.ThreadID, ns, requestedID)
 	if err != nil {
 		return nil, err
 	}
@@ -222,20 +182,86 @@ func (s *Saver) GetTuple(ctx context.Context, config *checkpoint.Config) (*check
 		Config: &checkpoint.Config{
 			ThreadID:     config.ThreadID,
 			CheckpointNS: ns,
-			CheckpointID: id,
+			CheckpointID: requestedID,
 		},
 		Checkpoint:    cp,
 		Metadata:      meta,
 		PendingWrites: writes,
 	}
-	if parentCheckpoint.Valid && parentCheckpoint.String != "" {
+	if loaded.parentCheckpoint.Valid && loaded.parentCheckpoint.String != "" {
 		tuple.ParentConfig = &checkpoint.Config{
 			ThreadID:     config.ThreadID,
 			CheckpointNS: ns,
-			CheckpointID: parentCheckpoint.String,
+			CheckpointID: loaded.parentCheckpoint.String,
 		}
 	}
 	return tuple, nil
+}
+
+type sqliteCheckpointRow struct {
+	checkpointID      string
+	parentCheckpoint  sql.NullString
+	checkpointType    sql.NullString
+	checkpointPayload []byte
+	metadataPayload   []byte
+}
+
+type listedCheckpoint struct {
+	threadID        string
+	namespace       string
+	id              string
+	parent          sql.NullString
+	checkpointType  sql.NullString
+	checkpointBytes []byte
+	metadataBytes   []byte
+}
+
+func (s *Saver) checkpointSelectColumns() string {
+	if s.hasCheckpointTypeCol {
+		return "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata"
+	}
+	return "checkpoint_id, parent_checkpoint_id, checkpoint, metadata"
+}
+
+func (s *Saver) checkpointRow(ctx context.Context, threadID, ns, checkpointID string) *sql.Row {
+	selectCols := s.checkpointSelectColumns()
+	if checkpointID != "" {
+		return s.db.QueryRowContext(ctx,
+			`SELECT `+selectCols+`
+ FROM checkpoints
+ WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ?`,
+			threadID, ns, checkpointID,
+		)
+	}
+	return s.db.QueryRowContext(ctx,
+		`SELECT `+selectCols+`
+ FROM checkpoints
+ WHERE thread_id = ? AND checkpoint_ns = ?
+ ORDER BY checkpoint_id DESC
+ LIMIT 1`,
+		threadID, ns,
+	)
+}
+
+func (s *Saver) scanCheckpointRow(row *sql.Row) (sqliteCheckpointRow, error) {
+	loaded := sqliteCheckpointRow{}
+	if s.hasCheckpointTypeCol {
+		err := row.Scan(
+			&loaded.checkpointID,
+			&loaded.parentCheckpoint,
+			&loaded.checkpointType,
+			&loaded.checkpointPayload,
+			&loaded.metadataPayload,
+		)
+		return loaded, err
+	}
+	err := row.Scan(
+		&loaded.checkpointID,
+		&loaded.parentCheckpoint,
+		&loaded.checkpointPayload,
+		&loaded.metadataPayload,
+	)
+	return loaded, err
 }
 
 // Put implements checkpoint.Saver.
@@ -381,12 +407,33 @@ func (s *Saver) List(
 		return nil, nil
 	}
 
-	args := make([]any, 0, 4)
-	selectCols := "thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, checkpoint, metadata"
-	if s.hasCheckpointTypeCol {
-		selectCols = "thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata"
+	query, args := s.sqliteListQuery(config, opts)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint/sqlite: list checkpoints: %w", err)
 	}
-	query := `SELECT ` + selectCols + `
+	listed := make([]listedCheckpoint, 0)
+	for rows.Next() {
+		item, err := s.scanListedCheckpointRow(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		listed = append(listed, item)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, fmt.Errorf("checkpoint/sqlite: iterate checkpoints: %w", err)
+	}
+	_ = rows.Close()
+
+	return s.listedCheckpointsToTuples(ctx, listed, opts.Filter)
+}
+
+func (s *Saver) sqliteListQuery(config *checkpoint.Config, opts checkpoint.ListOptions) (query string, args []any) {
+	args = make([]any, 0, 4)
+	query = `SELECT ` + s.checkpointListColumns() + `
 FROM checkpoints
 WHERE 1=1`
 	if config != nil {
@@ -402,95 +449,86 @@ WHERE 1=1`
 		query += ` LIMIT ?`
 		args = append(args, opts.Limit)
 	}
+	return query, args
+}
 
-	rows, err := s.db.QueryContext(ctx, query, args...)
+func (s *Saver) checkpointListColumns() string {
+	if s.hasCheckpointTypeCol {
+		return "thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata"
+	}
+	return "thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, checkpoint, metadata"
+}
+
+func (s *Saver) scanListedCheckpointRow(rows *sql.Rows) (listedCheckpoint, error) {
+	var (
+		threadID          string
+		namespace         string
+		checkpointID      string
+		parentCheckpoint  sql.NullString
+		checkpointType    sql.NullString
+		checkpointPayload []byte
+		metadataPayload   []byte
+		err               error
+	)
+	if s.hasCheckpointTypeCol {
+		err = rows.Scan(&threadID, &namespace, &checkpointID, &parentCheckpoint, &checkpointType, &checkpointPayload, &metadataPayload)
+	} else {
+		err = rows.Scan(&threadID, &namespace, &checkpointID, &parentCheckpoint, &checkpointPayload, &metadataPayload)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("checkpoint/sqlite: list checkpoints: %w", err)
+		return listedCheckpoint{}, fmt.Errorf("checkpoint/sqlite: scan checkpoint: %w", err)
 	}
-	type listedCheckpoint struct {
-		threadID        string
-		namespace       string
-		id              string
-		parent          sql.NullString
-		checkpointType  sql.NullString
-		checkpointBytes []byte
-		metadataBytes   []byte
-	}
-	listed := make([]listedCheckpoint, 0)
-	for rows.Next() {
-		var (
-			threadID          string
-			namespace         string
-			checkpointID      string
-			parentCheckpoint  sql.NullString
-			checkpointType    sql.NullString
-			checkpointPayload []byte
-			metadataPayload   []byte
-		)
-		if s.hasCheckpointTypeCol {
-			err = rows.Scan(&threadID, &namespace, &checkpointID, &parentCheckpoint, &checkpointType, &checkpointPayload, &metadataPayload)
-		} else {
-			err = rows.Scan(&threadID, &namespace, &checkpointID, &parentCheckpoint, &checkpointPayload, &metadataPayload)
-		}
-		if err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("checkpoint/sqlite: scan checkpoint: %w", err)
-		}
-		listed = append(listed, listedCheckpoint{
-			threadID:        threadID,
-			namespace:       namespace,
-			id:              checkpointID,
-			parent:          parentCheckpoint,
-			checkpointType:  checkpointType,
-			checkpointBytes: checkpointPayload,
-			metadataBytes:   metadataPayload,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, fmt.Errorf("checkpoint/sqlite: iterate checkpoints: %w", err)
-	}
-	_ = rows.Close()
+	return listedCheckpoint{
+		threadID:        threadID,
+		namespace:       namespace,
+		id:              checkpointID,
+		parent:          parentCheckpoint,
+		checkpointType:  checkpointType,
+		checkpointBytes: checkpointPayload,
+		metadataBytes:   metadataPayload,
+	}, nil
+}
 
+func (s *Saver) listedCheckpointsToTuples(ctx context.Context, listed []listedCheckpoint, filter map[string]any) ([]*checkpoint.CheckpointTuple, error) {
 	out := make([]*checkpoint.CheckpointTuple, 0, len(listed))
 	for _, item := range listed {
-		cp, err := s.decodeCheckpoint(item.checkpointType, item.checkpointBytes)
+		tuple, include, err := s.listedCheckpointTuple(ctx, item, filter)
 		if err != nil {
 			return nil, err
 		}
-		meta, err := s.decodeMetadata(item.metadataBytes)
-		if err != nil {
-			return nil, err
+		if include {
+			out = append(out, tuple)
 		}
-		if !checkpoint.MetadataMatchesFilter(meta, opts.Filter) {
-			continue
-		}
-
-		pendingWrites, err := s.loadWrites(ctx, item.threadID, item.namespace, item.id)
-		if err != nil {
-			return nil, err
-		}
-
-		tuple := &checkpoint.CheckpointTuple{
-			Config: &checkpoint.Config{
-				ThreadID:     item.threadID,
-				CheckpointNS: item.namespace,
-				CheckpointID: item.id,
-			},
-			Checkpoint:    cp,
-			Metadata:      meta,
-			PendingWrites: pendingWrites,
-		}
-		if item.parent.Valid && item.parent.String != "" {
-			tuple.ParentConfig = &checkpoint.Config{
-				ThreadID:     item.threadID,
-				CheckpointNS: item.namespace,
-				CheckpointID: item.parent.String,
-			}
-		}
-		out = append(out, tuple)
 	}
 	return out, nil
+}
+
+func (s *Saver) listedCheckpointTuple(ctx context.Context, item listedCheckpoint, filter map[string]any) (*checkpoint.CheckpointTuple, bool, error) {
+	cp, err := s.decodeCheckpoint(item.checkpointType, item.checkpointBytes)
+	if err != nil {
+		return nil, false, err
+	}
+	meta, err := s.decodeMetadata(item.metadataBytes)
+	if err != nil {
+		return nil, false, err
+	}
+	if !checkpoint.MetadataMatchesFilter(meta, filter) {
+		return nil, false, nil
+	}
+	pendingWrites, err := s.loadWrites(ctx, item.threadID, item.namespace, item.id)
+	if err != nil {
+		return nil, false, err
+	}
+	tuple := &checkpoint.CheckpointTuple{
+		Config:        &checkpoint.Config{ThreadID: item.threadID, CheckpointNS: item.namespace, CheckpointID: item.id},
+		Checkpoint:    cp,
+		Metadata:      meta,
+		PendingWrites: pendingWrites,
+	}
+	if item.parent.Valid && item.parent.String != "" {
+		tuple.ParentConfig = &checkpoint.Config{ThreadID: item.threadID, CheckpointNS: item.namespace, CheckpointID: item.parent.String}
+	}
+	return tuple, true, nil
 }
 
 // DeleteThread implements checkpoint.Saver.
@@ -525,58 +563,14 @@ func (s *Saver) DeleteForRuns(ctx context.Context, runIDs []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(runIDs) == 0 {
-		return nil
-	}
-	runSet := make(map[string]struct{}, len(runIDs))
-	for _, runID := range runIDs {
-		if runID != "" {
-			runSet[runID] = struct{}{}
-		}
-	}
+	runSet := runIDSet(runIDs)
 	if len(runSet) == 0 {
 		return nil
 	}
-
-	type checkpointKey struct {
-		threadID     string
-		namespace    string
-		checkpointID string
-	}
-
-	rows, err := s.db.QueryContext(ctx, `SELECT thread_id, checkpoint_ns, checkpoint_id, metadata FROM checkpoints`)
+	keys, err := s.sqliteCheckpointKeysForRuns(ctx, runSet)
 	if err != nil {
-		return fmt.Errorf("checkpoint/sqlite: query checkpoints for delete_for_runs: %w", err)
+		return err
 	}
-	keys := make([]checkpointKey, 0)
-	for rows.Next() {
-		var (
-			threadID     string
-			ns           string
-			checkpointID string
-			metadataRaw  []byte
-		)
-		if err := rows.Scan(&threadID, &ns, &checkpointID, &metadataRaw); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("checkpoint/sqlite: scan checkpoint for delete_for_runs: %w", err)
-		}
-		meta, err := s.decodeMetadata(metadataRaw)
-		if err != nil {
-			_ = rows.Close()
-			return err
-		}
-		if meta == nil {
-			continue
-		}
-		if _, ok := runSet[meta.RunID]; ok {
-			keys = append(keys, checkpointKey{threadID: threadID, namespace: ns, checkpointID: checkpointID})
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("checkpoint/sqlite: iterate checkpoints for delete_for_runs: %w", err)
-	}
-	_ = rows.Close()
 	if len(keys) == 0 {
 		return nil
 	}
@@ -587,6 +581,68 @@ func (s *Saver) DeleteForRuns(ctx context.Context, runIDs []string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := deleteSQLiteCheckpointsTx(ctx, tx, keys); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("checkpoint/sqlite: commit delete_for_runs: %w", err)
+	}
+	return nil
+}
+
+type sqliteDBCheckpointKey struct {
+	threadID     string
+	namespace    string
+	checkpointID string
+}
+
+func (s *Saver) sqliteCheckpointKeysForRuns(ctx context.Context, runSet map[string]struct{}) ([]sqliteDBCheckpointKey, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT thread_id, checkpoint_ns, checkpoint_id, metadata FROM checkpoints`)
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint/sqlite: query checkpoints for delete_for_runs: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	keys := make([]sqliteDBCheckpointKey, 0)
+	for rows.Next() {
+		key, include, err := s.scanSQLiteRunCheckpoint(rows, runSet)
+		if err != nil {
+			return nil, err
+		}
+		if include {
+			keys = append(keys, key)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("checkpoint/sqlite: iterate checkpoints for delete_for_runs: %w", err)
+	}
+	return keys, nil
+}
+
+func (s *Saver) scanSQLiteRunCheckpoint(rows *sql.Rows, runSet map[string]struct{}) (sqliteDBCheckpointKey, bool, error) {
+	var (
+		threadID     string
+		ns           string
+		checkpointID string
+		metadataRaw  []byte
+	)
+	if err := rows.Scan(&threadID, &ns, &checkpointID, &metadataRaw); err != nil {
+		return sqliteDBCheckpointKey{}, false, fmt.Errorf("checkpoint/sqlite: scan checkpoint for delete_for_runs: %w", err)
+	}
+	meta, err := s.decodeMetadata(metadataRaw)
+	if err != nil {
+		return sqliteDBCheckpointKey{}, false, err
+	}
+	if meta == nil {
+		return sqliteDBCheckpointKey{}, false, nil
+	}
+	if _, ok := runSet[meta.RunID]; !ok {
+		return sqliteDBCheckpointKey{}, false, nil
+	}
+	return sqliteDBCheckpointKey{threadID: threadID, namespace: ns, checkpointID: checkpointID}, true, nil
+}
+
+func deleteSQLiteCheckpointsTx(ctx context.Context, tx *sql.Tx, keys []sqliteDBCheckpointKey) error {
 	for _, key := range keys {
 		if _, err := tx.ExecContext(
 			ctx,
@@ -607,11 +663,17 @@ func (s *Saver) DeleteForRuns(ctx context.Context, runIDs []string) error {
 			return fmt.Errorf("checkpoint/sqlite: delete checkpoints for run: %w", err)
 		}
 	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("checkpoint/sqlite: commit delete_for_runs: %w", err)
-	}
 	return nil
+}
+
+func runIDSet(runIDs []string) map[string]struct{} {
+	runSet := make(map[string]struct{}, len(runIDs))
+	for _, runID := range runIDs {
+		if runID != "" {
+			runSet[runID] = struct{}{}
+		}
+	}
+	return runSet
 }
 
 // CopyThread implements checkpoint.Saver.
@@ -686,69 +748,84 @@ func (s *Saver) Prune(ctx context.Context, threadIDs []string, strategy checkpoi
 		if threadID == "" {
 			continue
 		}
-
-		if strategy == checkpoint.PruneStrategyDelete {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM writes WHERE thread_id = ?`, threadID); err != nil {
-				return fmt.Errorf("checkpoint/sqlite: prune delete writes: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM checkpoints WHERE thread_id = ?`, threadID); err != nil {
-				return fmt.Errorf("checkpoint/sqlite: prune delete checkpoints: %w", err)
-			}
-			continue
-		}
-
-		rows, err := tx.QueryContext(ctx,
-			`SELECT checkpoint_ns, MAX(checkpoint_id)
-			 FROM checkpoints
-			 WHERE thread_id = ?
-			 GROUP BY checkpoint_ns`,
-			threadID,
-		)
-		if err != nil {
-			return fmt.Errorf("checkpoint/sqlite: prune query latest: %w", err)
-		}
-
-		latestByNS := make(map[string]string)
-		for rows.Next() {
-			var ns, checkpointID string
-			if err := rows.Scan(&ns, &checkpointID); err != nil {
-				_ = rows.Close()
-				return fmt.Errorf("checkpoint/sqlite: prune scan latest: %w", err)
-			}
-			latestByNS[ns] = checkpointID
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("checkpoint/sqlite: prune iterate latest: %w", err)
-		}
-		_ = rows.Close()
-
-		for ns, latestID := range latestByNS {
-			if _, err := tx.ExecContext(
-				ctx,
-				`DELETE FROM writes
-				 WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id <> ?`,
-				threadID,
-				ns,
-				latestID,
-			); err != nil {
-				return fmt.Errorf("checkpoint/sqlite: prune delete writes keep_latest: %w", err)
-			}
-			if _, err := tx.ExecContext(
-				ctx,
-				`DELETE FROM checkpoints
-				 WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id <> ?`,
-				threadID,
-				ns,
-				latestID,
-			); err != nil {
-				return fmt.Errorf("checkpoint/sqlite: prune delete checkpoints keep_latest: %w", err)
-			}
+		if err := pruneSQLiteThreadTx(ctx, tx, threadID, strategy); err != nil {
+			return err
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("checkpoint/sqlite: commit prune: %w", err)
+	}
+	return nil
+}
+
+func pruneSQLiteThreadTx(ctx context.Context, tx *sql.Tx, threadID string, strategy checkpoint.PruneStrategy) error {
+	if strategy == checkpoint.PruneStrategyDelete {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM writes WHERE thread_id = ?`, threadID); err != nil {
+			return fmt.Errorf("checkpoint/sqlite: prune delete writes: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM checkpoints WHERE thread_id = ?`, threadID); err != nil {
+			return fmt.Errorf("checkpoint/sqlite: prune delete checkpoints: %w", err)
+		}
+		return nil
+	}
+
+	latestByNS, err := querySQLiteLatestCheckpointByNamespaceTx(ctx, tx, threadID)
+	if err != nil {
+		return err
+	}
+	return pruneSQLiteKeepLatestTx(ctx, tx, threadID, latestByNS)
+}
+
+func querySQLiteLatestCheckpointByNamespaceTx(ctx context.Context, tx *sql.Tx, threadID string) (map[string]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT checkpoint_ns, MAX(checkpoint_id)
+		 FROM checkpoints
+		 WHERE thread_id = ?
+		 GROUP BY checkpoint_ns`,
+		threadID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint/sqlite: prune query latest: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	latestByNS := make(map[string]string)
+	for rows.Next() {
+		var ns, checkpointID string
+		if err := rows.Scan(&ns, &checkpointID); err != nil {
+			return nil, fmt.Errorf("checkpoint/sqlite: prune scan latest: %w", err)
+		}
+		latestByNS[ns] = checkpointID
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("checkpoint/sqlite: prune iterate latest: %w", err)
+	}
+	return latestByNS, nil
+}
+
+func pruneSQLiteKeepLatestTx(ctx context.Context, tx *sql.Tx, threadID string, latestByNS map[string]string) error {
+	for ns, latestID := range latestByNS {
+		if _, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM writes
+			 WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id <> ?`,
+			threadID,
+			ns,
+			latestID,
+		); err != nil {
+			return fmt.Errorf("checkpoint/sqlite: prune delete writes keep_latest: %w", err)
+		}
+		if _, err := tx.ExecContext(
+			ctx,
+			`DELETE FROM checkpoints
+			 WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id <> ?`,
+			threadID,
+			ns,
+			latestID,
+		); err != nil {
+			return fmt.Errorf("checkpoint/sqlite: prune delete checkpoints keep_latest: %w", err)
+		}
 	}
 	return nil
 }

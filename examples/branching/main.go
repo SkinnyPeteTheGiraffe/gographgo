@@ -20,9 +20,9 @@ import (
 // State holds review pipeline data.
 type State struct {
 	Item    string
-	Score   int
 	Verdict string
 	Notice  string
+	Score   int
 }
 
 func main() {
