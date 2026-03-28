@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Template describes a project bootstrap template.
@@ -48,6 +49,7 @@ const (
 	templateFilePerm        = 0o600
 	maxTemplateArchiveBytes = 32 << 20
 	maxTemplateExtractBytes = 64 << 20
+	templateDownloadTimeout = 30 * time.Second
 )
 
 var httpGet = func(req *http.Request) (*http.Response, error) {
@@ -72,7 +74,9 @@ func CreateNew(path, templateID string, stdout io.Writer) error {
 		return err
 	}
 
-	req, err := newTemplateRequest(t.URL)
+	downloadCtx, cancel := context.WithTimeout(context.Background(), templateDownloadTimeout)
+	defer cancel()
+	req, err := newTemplateRequest(downloadCtx, t.URL)
 	if err != nil {
 		return err
 	}
@@ -244,7 +248,7 @@ func detectArchiveRoot(zr *zip.Reader) string {
 	return prefix + "/"
 }
 
-func newTemplateRequest(rawURL string) (*http.Request, error) {
+func newTemplateRequest(ctx context.Context, rawURL string) (*http.Request, error) {
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return nil, fmt.Errorf("invalid template URL: %w", err)
@@ -255,7 +259,7 @@ func newTemplateRequest(rawURL string) (*http.Request, error) {
 	if !strings.EqualFold(parsed.Hostname(), "github.com") {
 		return nil, fmt.Errorf("template host not allowed: %q", parsed.Hostname())
 	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, parsed.String(), http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("build template request: %w", err)
 	}

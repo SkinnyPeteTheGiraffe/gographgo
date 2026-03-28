@@ -3,12 +3,14 @@ package cli
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCreateNew(t *testing.T) {
@@ -58,9 +60,25 @@ func TestCreateNewInvalidTemplate(t *testing.T) {
 }
 
 func TestNewTemplateRequest_RejectsNonHTTPS(t *testing.T) {
-	_, err := newTemplateRequest("http://github.com/langchain-ai/deep-agent-template/archive/refs/heads/main.zip")
+	_, err := newTemplateRequest(context.Background(), "http://github.com/langchain-ai/deep-agent-template/archive/refs/heads/main.zip")
 	if err == nil || !strings.Contains(err.Error(), "must be https") {
 		t.Fatalf("expected https validation error, got %v", err)
+	}
+}
+
+func TestNewTemplateRequest_UsesProvidedContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(cancel)
+	req, err := newTemplateRequest(ctx, "https://github.com/langchain-ai/deep-agent-template/archive/refs/heads/main.zip")
+	if err != nil {
+		t.Fatalf("newTemplateRequest() error = %v", err)
+	}
+	deadline, ok := req.Context().Deadline()
+	if !ok {
+		t.Fatal("expected request context deadline")
+	}
+	if time.Until(deadline) <= 0 {
+		t.Fatalf("expected future deadline, got %v", deadline)
 	}
 }
 
