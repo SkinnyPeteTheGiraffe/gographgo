@@ -513,12 +513,8 @@ func (g *CompiledStateGraph[State, Context, Input, Output]) mergeConfig(config C
 	if g.stateStore != nil && config.StateStore == nil {
 		config.StateStore = g.stateStore
 	}
-	if config.StateMode == "" {
-		if g.stateMode != "" {
-			config.StateMode = g.stateMode
-		} else {
-			config.StateMode = StateStoreModeCheckpointAuthoritative
-		}
+	if config.StateMode == "" && g.stateMode != "" {
+		config.StateMode = g.stateMode
 	}
 	if config.CheckpointStore != nil {
 		if config.Checkpointer == nil {
@@ -533,6 +529,9 @@ func (g *CompiledStateGraph[State, Context, Input, Output]) mergeConfig(config C
 	}
 	if config.StateStore != nil && config.StateMode == "" {
 		config.StateMode = config.StateStore.Mode()
+	}
+	if config.StateMode == "" {
+		config.StateMode = StateStoreModeCheckpointAuthoritative
 	}
 	if g.store != nil && config.Store == nil {
 		config.Store = g.store
