@@ -2836,6 +2836,112 @@ func TestPregelLoop_SequentialInterruptResumesDoNotReplayHistoricalTasks(t *test
 	}
 }
 
+func TestPregelLoop_ThreeSequentialInterruptsNoReplayOrRecursionLimit(t *testing.T) {
+	saver := checkpoint.NewInMemorySaver()
+	g := NewStateGraph[map[string]any]()
+	g.AddNode("interview", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
+		answer := NodeInterrupt(ctx, Dyn("interview question"))
+		return NodeWrites(DynMap(map[string]any{"interview_answer": answer.Value()})), nil
+	})
+	g.AddNode("consultation", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
+		answer := NodeInterrupt(ctx, Dyn("consultation question"))
+		return NodeWrites(DynMap(map[string]any{"consultation_answer": answer.Value()})), nil
+	})
+	g.AddNode("final", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
+		answer := NodeInterrupt(ctx, Dyn("final question"))
+		return NodeWrites(DynMap(map[string]any{"final_answer": answer.Value()})), nil
+	})
+	g.AddNode("done", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		return NodeWrites(DynMap(map[string]any{"done": true})), nil
+	})
+	g.AddEdge(Start, "interview")
+	g.AddEdge("interview", "consultation")
+	g.AddEdge("consultation", "final")
+	g.AddEdge("final", "done")
+	g.AddEdge("done", End)
+
+	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	threadID := "three-stage-workflow"
+
+	// First invoke - should interrupt at interview
+	first, err := compiled.Invoke(WithConfig(context.Background(), Config{ThreadID: threadID, Checkpointer: saver}), map[string]any{})
+	if err != nil {
+		t.Fatalf("first invoke: %v", err)
+	}
+	if len(first.Interrupts) != 1 {
+		t.Fatalf("expected 1 interrupt at interview, got %d", len(first.Interrupts))
+	}
+
+	// Second invoke - resume interview, should interrupt at consultation
+	second, err := compiled.Invoke(WithConfig(context.Background(), Config{
+		ThreadID:     threadID,
+		Checkpointer: saver,
+		Metadata:     map[string]any{ConfigKeyResumeMap: map[string]any{first.Interrupts[0].ID: "interview_answer"}},
+	}), map[string]any{})
+	if err != nil {
+		t.Fatalf("second invoke: %v", err)
+	}
+	if len(second.Interrupts) != 1 {
+		t.Fatalf("expected 1 interrupt at consultation, got %d", len(second.Interrupts))
+	}
+
+	// Third invoke - resume consultation, should interrupt at final
+	third, err := compiled.Invoke(WithConfig(context.Background(), Config{
+		ThreadID:     threadID,
+		Checkpointer: saver,
+		Metadata:     map[string]any{ConfigKeyResumeMap: map[string]any{second.Interrupts[0].ID: "consultation_answer"}},
+	}), map[string]any{})
+	if err != nil {
+		t.Fatalf("third invoke: %v", err)
+	}
+	if len(third.Interrupts) != 1 {
+		t.Fatalf("expected 1 interrupt at final, got %d", len(third.Interrupts))
+	}
+
+	// Fourth invoke - resume final, should complete
+	fourth, err := compiled.Invoke(WithConfig(context.Background(), Config{
+		ThreadID:     threadID,
+		Checkpointer: saver,
+		Metadata:     map[string]any{ConfigKeyResumeMap: map[string]any{third.Interrupts[0].ID: "final_answer"}},
+	}), map[string]any{})
+	if err != nil {
+		t.Fatalf("fourth invoke: %v", err)
+	}
+	if len(fourth.Interrupts) != 0 {
+		t.Fatalf("expected no interrupts after final resume, got %d", len(fourth.Interrupts))
+	}
+
+	state, ok := fourth.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map output, got %T", fourth.Value)
+	}
+	if got := state["interview_answer"]; got != "interview_answer" {
+		t.Fatalf("interview_answer = %v, want interview_answer", got)
+	}
+	if got := state["consultation_answer"]; got != "consultation_answer" {
+		t.Fatalf("consultation_answer = %v, want consultation_answer", got)
+	}
+	if got := state["final_answer"]; got != "final_answer" {
+		t.Fatalf("final_answer = %v, want final_answer", got)
+	}
+	if got := state["done"]; got != true {
+		t.Fatalf("done = %v, want true", got)
+	}
+
+	// Fifth invoke - post-completion check, should have no interrupts
+	fifth, err := compiled.Invoke(WithConfig(context.Background(), Config{ThreadID: threadID, Checkpointer: saver}), map[string]any{})
+	if err != nil {
+		t.Fatalf("fifth invoke: %v", err)
+	}
+	if len(fifth.Interrupts) != 0 {
+		t.Fatalf("expected no interrupts after completion, got %d", len(fifth.Interrupts))
+	}
+}
+
 func TestPregelLoop_ResumeRequiresMapWhenMultiplePendingInterrupts(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 	g := NewStateGraph[map[string]any]()

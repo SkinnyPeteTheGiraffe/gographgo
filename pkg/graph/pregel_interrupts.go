@@ -151,6 +151,24 @@ func pendingKey(taskID, channel string) string {
 	return taskID + "|" + channel
 }
 
+func removeConsumedInterruptWrites(pending []checkpoint.PendingWrite, completedTaskIDs map[string]struct{}) []checkpoint.PendingWrite {
+	if len(completedTaskIDs) == 0 {
+		return pending
+	}
+	out := make([]checkpoint.PendingWrite, 0, len(pending))
+	for _, w := range pending {
+		if !isSpecialPendingChannel(w.Channel) {
+			out = append(out, w)
+			continue
+		}
+		if _, ok := completedTaskIDs[w.TaskID]; ok {
+			continue
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
 func isSpecialPendingChannel(channel string) bool {
 	switch channel {
 	case pregelInterrupt, pregelResume, pregelError:

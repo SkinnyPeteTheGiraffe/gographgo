@@ -504,17 +504,18 @@ func subgraphCheckpointNamespaceWithMode(parentNS, nodeName, taskID string, mode
 // mergeConfig merges the compiled graph's default config with a caller-provided
 // config, giving precedence to the caller's non-zero values.
 func (g *CompiledStateGraph[State, Context, Input, Output]) mergeConfig(config Config) Config {
+	config = g.mergeCheckpointConfig(config)
+	config = g.mergeStateStoreConfig(config)
+	config = g.mergeRuntimeConfig(config)
+	return config
+}
+
+func (g *CompiledStateGraph[State, Context, Input, Output]) mergeCheckpointConfig(config Config) Config {
 	if g.checkpointStore != nil && config.CheckpointStore == nil {
 		config.CheckpointStore = g.checkpointStore
 	}
 	if g.checkpointer != nil && config.Checkpointer == nil {
 		config.Checkpointer = g.checkpointer
-	}
-	if g.stateStore != nil && config.StateStore == nil {
-		config.StateStore = g.stateStore
-	}
-	if config.StateMode == "" && g.stateMode != "" {
-		config.StateMode = g.stateMode
 	}
 	if config.CheckpointStore != nil {
 		if config.Checkpointer == nil {
@@ -527,12 +528,26 @@ func (g *CompiledStateGraph[State, Context, Input, Output]) mergeConfig(config C
 			config.StateMode = config.CheckpointStore.Mode()
 		}
 	}
+	return config
+}
+
+func (g *CompiledStateGraph[State, Context, Input, Output]) mergeStateStoreConfig(config Config) Config {
+	if g.stateStore != nil && config.StateStore == nil {
+		config.StateStore = g.stateStore
+	}
 	if config.StateStore != nil && config.StateMode == "" {
 		config.StateMode = config.StateStore.Mode()
+	}
+	if config.StateMode == "" && g.stateMode != "" {
+		config.StateMode = g.stateMode
 	}
 	if config.StateMode == "" {
 		config.StateMode = StateStoreModeCheckpointAuthoritative
 	}
+	return config
+}
+
+func (g *CompiledStateGraph[State, Context, Input, Output]) mergeRuntimeConfig(config Config) Config {
 	if g.store != nil && config.Store == nil {
 		config.Store = g.store
 	}

@@ -60,9 +60,9 @@ type CheckpointStore interface {
 
 // BasicCheckpointStore is a small helper that satisfies CheckpointStore.
 type BasicCheckpointStore struct {
-	ExecutionMode StateStoreMode
 	Saver         checkpoint.Saver
 	ExternalState StateStore
+	ExecutionMode StateStoreMode
 }
 
 // Mode reports the configured execution mode.

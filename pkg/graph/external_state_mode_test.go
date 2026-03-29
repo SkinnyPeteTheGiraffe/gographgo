@@ -11,12 +11,12 @@ import (
 )
 
 type testAuthoritativeStateStore struct {
-	mu                     sync.Mutex
-	mode                   StateStoreMode
 	values                 map[string]any
+	mode                   StateStoreMode
 	version                string
-	bumpVersionAfterReplay bool
 	replayReads            int
+	bumpVersionAfterReplay bool
+	mu                     sync.Mutex
 }
 
 func (s *testAuthoritativeStateStore) Mode() StateStoreMode {

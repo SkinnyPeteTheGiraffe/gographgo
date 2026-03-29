@@ -51,8 +51,8 @@ type pregelLoopState[State any] struct {
 }
 
 type resolvedStateAuthority struct {
-	mode       StateStoreMode
 	stateStore StateStore
+	mode       StateStoreMode
 }
 
 func (s *pregelLoopState[State]) bumpChannelVersion(channel string) {
@@ -262,15 +262,16 @@ func configureLoopResumeAndInput[State, Input any](
 	if err != nil {
 		return nil, err
 	}
-	if authoritativeState != nil {
+	switch {
+	case authoritativeState != nil:
 		if err := mapInputToChannels(channels, authoritativeState.Values); err != nil {
 			return nil, fmt.Errorf("mapping authoritative state to channels: %w", err)
 		}
-	} else if !hasResume && !state.isReplaying {
+	case !hasResume && !state.isReplaying:
 		if err := mapInputToChannels(channels, any(input)); err != nil {
 			return nil, fmt.Errorf("mapping input to channels: %w", err)
 		}
-	} else if hasResume {
+	case hasResume:
 		seen := make(map[string]int64, len(state.channelVersions))
 		for key, version := range state.channelVersions {
 			seen[key] = version
@@ -344,6 +345,8 @@ func executePregelStep[State, Context, Input, Output any](
 	}
 
 	hasNodeInterrupt := resultSetHasNodeInterrupt(results)
+	cleanupResumedTaskWrites(state, taskErr, hasNodeInterrupt)
+
 	for _, r := range results {
 		emitTaskFinish(opts.streamOut, r, state.step, opts.streamModes, baseNamespace)
 	}
@@ -508,6 +511,14 @@ func resultSetHasNodeInterrupt(results []pregelTaskResult) bool {
 		}
 	}
 	return false
+}
+
+func cleanupResumedTaskWrites[State any](state *pregelLoopState[State], taskErr error, hasNodeInterrupt bool) {
+	if taskErr != nil || hasNodeInterrupt || len(state.resumedTaskIDs) == 0 {
+		return
+	}
+	state.pendingWrites = removeConsumedInterruptWrites(state.pendingWrites, state.resumedTaskIDs)
+	state.resumedTaskIDs = nil
 }
 
 func applyResultsToChannels[State, Context, Input, Output any](
@@ -1962,12 +1973,27 @@ func taskResultPayload(r pregelTaskResult) map[string]any {
 }
 
 func checkpointStreamPayload(cp *checkpoint.Checkpoint, meta *checkpoint.CheckpointMetadata, config Config, pendingWrites []checkpoint.PendingWrite, next []string) map[string]any {
+	return map[string]any{
+		"config":        checkpointStreamConfig(cp, config),
+		"metadata":      checkpointStreamMetadata(meta),
+		"values":        checkpointStreamValues(cp),
+		"next":          checkpointStreamNext(next, pendingWrites),
+		"parent_config": nil,
+		"tasks":         checkpointStreamTasks(next, pendingWrites),
+	}
+}
+
+func checkpointStreamValues(cp *checkpoint.Checkpoint) map[string]any {
 	values := map[string]any{}
 	if cp != nil && cp.ChannelValues != nil {
 		for k, v := range cp.ChannelValues {
 			values[k] = v
 		}
 	}
+	return values
+}
+
+func checkpointStreamConfig(cp *checkpoint.Checkpoint, config Config) map[string]any {
 	cfg := map[string]any{
 		"thread_id":     config.ThreadID,
 		"checkpoint_ns": config.CheckpointNS,
@@ -1975,31 +2001,44 @@ func checkpointStreamPayload(cp *checkpoint.Checkpoint, meta *checkpoint.Checkpo
 	if cp != nil && cp.ID != "" {
 		cfg["checkpoint_id"] = cp.ID
 	}
-	metadata := map[string]any{}
-	if meta != nil {
-		metadata["source"] = meta.Source
-		metadata["step"] = meta.Step
-		if version := checkpointExternalStateVersion(meta); version != "" {
-			metadata[ExternalStateVersionMetadataKey] = version
-		}
-		if meta.RunID != "" {
-			metadata["run_id"] = meta.RunID
-		}
-		if len(meta.Parents) > 0 {
-			parents := make(map[string]string, len(meta.Parents))
-			for k, v := range meta.Parents {
-				parents[k] = v
-			}
-			metadata["parents"] = parents
-		}
-	}
+	return cfg
+}
 
+func checkpointStreamMetadata(meta *checkpoint.CheckpointMetadata) map[string]any {
+	metadata := map[string]any{}
+	if meta == nil {
+		return metadata
+	}
+	metadata["source"] = meta.Source
+	metadata["step"] = meta.Step
+	if version := checkpointExternalStateVersion(meta); version != "" {
+		metadata[ExternalStateVersionMetadataKey] = version
+	}
+	if meta.RunID != "" {
+		metadata["run_id"] = meta.RunID
+	}
+	if len(meta.Parents) > 0 {
+		parents := make(map[string]string, len(meta.Parents))
+		for k, v := range meta.Parents {
+			parents[k] = v
+		}
+		metadata["parents"] = parents
+	}
+	return metadata
+}
+
+func checkpointStreamNext(next []string, pendingWrites []checkpoint.PendingWrite) []string {
 	nextNodes := append([]string(nil), next...)
-	checkpointTasks := make([]map[string]any, 0)
-	pendingNext, pendingTaskList, _ := snapshotNextAndTasks(pendingWrites)
+	pendingNext, _, _ := snapshotNextAndTasks(pendingWrites)
 	if len(nextNodes) == 0 && len(pendingNext) > 0 {
 		nextNodes = append(nextNodes, pendingNext...)
 	}
+	return nextNodes
+}
+
+func checkpointStreamTasks(next []string, pendingWrites []checkpoint.PendingWrite) []map[string]any {
+	checkpointTasks := make([]map[string]any, 0)
+	_, pendingTaskList, _ := snapshotNextAndTasks(pendingWrites)
 	for _, task := range pendingTaskList {
 		checkpointTasks = append(checkpointTasks, map[string]any{
 			"id":         task.ID,
@@ -2009,22 +2048,14 @@ func checkpointStreamPayload(cp *checkpoint.Checkpoint, meta *checkpoint.Checkpo
 		})
 	}
 	if len(checkpointTasks) == 0 {
-		for _, name := range nextNodes {
+		for _, name := range next {
 			checkpointTasks = append(checkpointTasks, map[string]any{
 				"name":  name,
 				"state": nil,
 			})
 		}
 	}
-
-	return map[string]any{
-		"config":        cfg,
-		"metadata":      metadata,
-		"values":        values,
-		"next":          nextNodes,
-		"parent_config": nil,
-		"tasks":         checkpointTasks,
-	}
+	return checkpointTasks
 }
 
 func nextNodeNames[State any](tasks []pregelTask[State]) []string {
