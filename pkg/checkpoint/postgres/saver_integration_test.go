@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,11 +93,60 @@ func newSaver(t *testing.T) *postgres.Saver {
 	db.SetMaxIdleConns(4)
 	t.Cleanup(func() { _ = db.Close() })
 
-	s, err := postgres.New(db, checkpoint.JSONSerializer{})
+	s, err := postgres.NewWithOptions(db, checkpoint.JSONSerializer{}, postgres.Options{AutoMigrate: true})
 	if err != nil {
 		t.Fatalf("new saver: %v", err)
 	}
 	return s
+}
+
+func newDBForDSN(t *testing.T, dsn string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open pgx: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func newDatabaseDSN(t *testing.T, prefix string) string {
+	t.Helper()
+	ctx := context.Background()
+	admin := newDB(t)
+	dbName := fmt.Sprintf("%s_%d", sanitizeIdentifier(prefix), time.Now().UnixNano())
+	if _, err := admin.ExecContext(ctx, `CREATE DATABASE "`+dbName+`"`); err != nil {
+		t.Fatalf("create database %s: %v", dbName, err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(ctx, `DROP DATABASE IF EXISTS "`+dbName+`"`)
+	})
+
+	parsed, err := url.Parse(embeddedPGDSN)
+	if err != nil {
+		t.Fatalf("parse embedded DSN: %v", err)
+	}
+	parsed.Path = "/" + dbName
+	return parsed.String()
+}
+
+func sanitizeIdentifier(prefix string) string {
+	if prefix == "" {
+		return "gographgo"
+	}
+	var b strings.Builder
+	for _, r := range prefix {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteRune('_')
+	}
+	out := b.String()
+	if out == "" {
+		return "gographgo"
+	}
+	return out
 }
 
 func newDB(t *testing.T) *sql.DB {
@@ -130,6 +181,75 @@ func mkCP(id string, values map[string]any) *checkpoint.Checkpoint {
 
 func mkMeta(source string, step int) *checkpoint.CheckpointMetadata {
 	return &checkpoint.CheckpointMetadata{Source: source, Step: step}
+}
+
+func TestSaver_NewWithOptions_AutoMigrateEnabled_EmbeddedPostgres(t *testing.T) {
+	ctx := context.Background()
+	dsn := newDatabaseDSN(t, "automigrate_enabled")
+	db := newDBForDSN(t, dsn)
+
+	_, err := postgres.NewWithOptions(db, checkpoint.JSONSerializer{}, postgres.Options{AutoMigrate: true})
+	if err != nil {
+		t.Fatalf("NewWithOptions auto-migrate: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM checkpoint_migrations`).Scan(&count); err != nil {
+		t.Fatalf("query checkpoint_migrations: %v", err)
+	}
+	if count == 0 {
+		t.Fatal("expected migrations to be applied")
+	}
+}
+
+func TestSaver_NewWithOptions_AutoMigrateDisabledMissingSchema_EmbeddedPostgres(t *testing.T) {
+	ctx := context.Background()
+	dsn := newDatabaseDSN(t, "automigrate_disabled_missing")
+	db := newDBForDSN(t, dsn)
+
+	_, err := postgres.NewWithOptions(db, checkpoint.JSONSerializer{}, postgres.Options{AutoMigrate: false})
+	if err == nil {
+		t.Fatal("expected schema initialization error")
+	}
+	if !strings.Contains(err.Error(), "schema not initialized") {
+		t.Fatalf("error = %v, want schema not initialized", err)
+	}
+
+	var table sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT to_regclass('checkpoint_migrations')::text`).Scan(&table); err != nil {
+		t.Fatalf("check checkpoint_migrations table: %v", err)
+	}
+	if table.Valid {
+		t.Fatalf("expected no schema mutation, checkpoint_migrations=%q", table.String)
+	}
+}
+
+func TestSaver_NewWithOptions_AutoMigrateDisabledPreProvisionedSchema_EmbeddedPostgres(t *testing.T) {
+	ctx := context.Background()
+	dsn := newDatabaseDSN(t, "automigrate_disabled_provisioned")
+	db := newDBForDSN(t, dsn)
+
+	if _, err := postgres.NewWithOptions(db, checkpoint.JSONSerializer{}, postgres.Options{AutoMigrate: true}); err != nil {
+		t.Fatalf("bootstrap schema with auto-migrate: %v", err)
+	}
+
+	s, err := postgres.NewWithOptions(db, checkpoint.JSONSerializer{}, postgres.Options{AutoMigrate: false})
+	if err != nil {
+		t.Fatalf("NewWithOptions pre-provisioned schema: %v", err)
+	}
+
+	threadID := fmt.Sprintf("thread-preprovisioned-%d", time.Now().UnixNano())
+	stored, err := s.Put(ctx, &checkpoint.Config{ThreadID: threadID}, mkCP("cp-001", map[string]any{"counter": 1}), mkMeta("loop", 0))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	got, err := s.GetTuple(ctx, stored)
+	if err != nil {
+		t.Fatalf("GetTuple: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected tuple")
+	}
 }
 
 func TestSaver_PutGetTuple_EmbeddedPostgres(t *testing.T) {

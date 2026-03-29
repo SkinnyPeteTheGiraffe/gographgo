@@ -61,12 +61,46 @@ saver, err := sqlite.NewSaver("./checkpoints.db")
 PostgreSQL backend for multi-instance / production deployments.
 
 ```go
-import "github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint/postgres"
+import (
+    "github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint"
+    "github.com/SkinnyPeteTheGiraffe/gographgo/pkg/checkpoint/postgres"
+)
 
-saver, err := postgres.NewSaver(ctx, "postgres://user:pass@host/db")
+saver, err := postgres.OpenWithOptions(
+    "postgres://user:pass@host/db",
+    checkpoint.JSONSerializer{},
+    postgres.Options{}, // AutoMigrate=false (no runtime DDL)
+)
 ```
 
-Both backends auto-migrate their schema on first use.
+Production recommendation: pre-provision the Postgres schema in CI/CD and keep
+`AutoMigrate` disabled in app/runtime code.
+
+If you want library-managed setup (local development or explicit opt-in), use
+either of these flows:
+
+```go
+// Explicit migration call.
+saver, err := postgres.OpenWithOptions(dsn, checkpoint.JSONSerializer{}, postgres.Options{})
+if err != nil {
+    return err
+}
+if err := saver.Migrate(ctx); err != nil {
+    return err
+}
+```
+
+```go
+// One-step opt-in migration at construction time.
+saver, err := postgres.OpenWithOptions(
+    dsn,
+    checkpoint.JSONSerializer{},
+    postgres.Options{AutoMigrate: true},
+)
+```
+
+For compatibility with older behavior, `postgres.OpenAutoMigrate(...)` and
+`postgres.NewAutoMigrate(...)` are also available.
 
 ---
 
@@ -101,6 +135,49 @@ second, _ := compiled.Invoke(graph.WithConfig(ctx, cfg), State{})
 ```
 
 The `State{}` you pass on resume is generally ignored for fields that already exist in the checkpoint — the persisted state takes precedence. New fields not yet in the checkpoint will be populated from the input.
+
+---
+
+## Authoritative external state mode
+
+If your business/domain state already lives in an external system (for example: DB row state + outbox stream), you can run the engine in `authoritative_external_state` mode.
+
+In this mode:
+- External domain state is authoritative.
+- Checkpoints are orchestration metadata (step/task versions, pending writes, interrupts, resume bookkeeping).
+- Resume/replay only proceeds when checkpoint metadata and external monotonic state version match.
+
+```go
+type MyStateStore struct{}
+
+func (s *MyStateStore) Mode() graph.StateStoreMode {
+    return graph.StateStoreModeAuthoritativeExternalState
+}
+
+func (s *MyStateStore) Read(ctx context.Context, req graph.StateStoreReadRequest) (*graph.AuthoritativeStateSnapshot, error) {
+    // Load authoritative domain state and its monotonic token (version/LSN/etc.)
+    return &graph.AuthoritativeStateSnapshot{
+        Values: map[string]any{"status": "pending"},
+        Version: "42",
+    }, nil
+}
+
+compiled, err := builder.Compile(graph.CompileOptions{
+    Checkpointer: saver,
+    StateStore:   &MyStateStore{},
+    StateMode:    graph.StateStoreModeAuthoritativeExternalState,
+})
+```
+
+### Invariants and failure semantics
+
+- `authoritative_external_state` requires all of: `Checkpointer`, `ThreadID`, and `StateStore`; invoke fails fast with actionable errors if any are missing.
+- `StateStore.Read` must return a non-empty monotonic `Version` token.
+- Every checkpoint write stores that token in metadata (`external_state_version`).
+- Resume/replay validates checkpoint token vs current authoritative token.
+  - On mismatch, execution returns `*graph.ExternalStateConflictError`.
+  - The runtime does not continue with stale orchestration state.
+- Interrupt/resume remains supported: pending interrupt/resume writes still come from checkpoints, while business state comes from the external state store.
 
 ---
 
