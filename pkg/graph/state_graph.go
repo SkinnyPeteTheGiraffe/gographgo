@@ -1244,6 +1244,9 @@ func coercePathMap(pathMap any) (map[string]string, error) {
 // CompileOptions contains optional configuration for graph compilation.
 type CompileOptions struct {
 	Checkpointer    checkpoint.Saver
+	CheckpointStore CheckpointStore
+	StateStore      StateStore
+	StateMode       StateStoreMode
 	Store           Store
 	Cache           Cache
 	Context         any
@@ -1309,6 +1312,9 @@ func (g *StateGraph[State, Context, Input, Output]) Compile(options ...CompileOp
 	return &CompiledStateGraph[State, Context, Input, Output]{
 		builder:         g,
 		checkpointer:    opts.Checkpointer,
+		checkpointStore: opts.CheckpointStore,
+		stateStore:      opts.StateStore,
+		stateMode:       opts.StateMode,
 		store:           opts.Store,
 		cache:           opts.Cache,
 		contextValue:    opts.Context,

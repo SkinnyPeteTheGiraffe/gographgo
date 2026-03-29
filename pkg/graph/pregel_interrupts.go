@@ -241,7 +241,7 @@ func applyResumeWrites(
 	pending []checkpoint.PendingWrite,
 	resumeMap map[string]Dynamic,
 	resumeValues []Dynamic,
-) ([]checkpoint.PendingWrite, []pendingInterrupt, error) {
+) ([]checkpoint.PendingWrite, map[string]struct{}, error) {
 	unresolved := pendingInterrupts(pending)
 	if err := validateResumeRequest(unresolved, resumeMap, resumeValues); err != nil {
 		return pending, nil, err
@@ -260,10 +260,14 @@ func applyResumeWrites(
 	}
 	mapUpdates = append(mapUpdates, valueUpdates...)
 	if len(mapUpdates) == 0 {
-		return pending, unresolved, nil
+		return pending, nil, nil
+	}
+	resumedTaskIDs := make(map[string]struct{}, len(mapUpdates))
+	for _, update := range mapUpdates {
+		resumedTaskIDs[update.TaskID] = struct{}{}
 	}
 	pending = mergePendingWrites(pending, mapUpdates)
-	return pending, unresolved, nil
+	return pending, resumedTaskIDs, nil
 }
 
 func validateResumeRequest(unresolved []pendingInterrupt, resumeMap map[string]Dynamic, resumeValues []Dynamic) error {
@@ -444,13 +448,20 @@ func prepareResumedTasks[State, Context, Input, Output any](
 	config Config,
 	channels *pregelChannelMap,
 	pendingWrites []checkpoint.PendingWrite,
+	resumedTaskIDs map[string]struct{},
 ) []pregelTask[State] {
+	if len(resumedTaskIDs) == 0 {
+		return nil
+	}
 	interruptByTask := interruptsByTask(pendingWrites)
 	if len(interruptByTask) == 0 {
 		return nil
 	}
 	out := make([]pregelTask[State], 0, len(interruptByTask))
 	for taskID, pending := range interruptByTask {
+		if _, ok := resumedTaskIDs[taskID]; !ok {
+			continue
+		}
 		resumes := taskResumeValues(pendingWrites, taskID)
 		if len(resumes) == 0 {
 			continue

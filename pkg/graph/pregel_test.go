@@ -2750,6 +2750,92 @@ func TestPregelLoop_ResumeMapByInterruptID(t *testing.T) {
 	}
 }
 
+func TestPregelLoop_SequentialInterruptResumesDoNotReplayHistoricalTasks(t *testing.T) {
+	saver := checkpoint.NewInMemorySaver()
+	g := NewStateGraph[map[string]any]()
+	g.AddNode("ask1", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
+		answer := NodeInterrupt(ctx, Dyn("q1"))
+		return NodeWrites(DynMap(map[string]any{"a1": answer.Value()})), nil
+	})
+	g.AddNode("ask2", func(ctx context.Context, _ map[string]any) (NodeResult, error) {
+		answer := NodeInterrupt(ctx, Dyn("q2"))
+		return NodeWrites(DynMap(map[string]any{"a2": answer.Value()})), nil
+	})
+	g.AddNode("done", func(_ context.Context, _ map[string]any) (NodeResult, error) {
+		return NodeWrites(DynMap(map[string]any{"done": true})), nil
+	})
+	g.AddEdge(Start, "ask1")
+	g.AddEdge("ask1", "ask2")
+	g.AddEdge("ask2", "done")
+	g.AddEdge("done", End)
+
+	compiled, err := g.Compile(CompileOptions{Checkpointer: saver})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	firstCfg := Config{ThreadID: "resume-sequential", Checkpointer: saver}
+	first, err := compiled.Invoke(WithConfig(context.Background(), firstCfg), map[string]any{})
+	if err != nil {
+		t.Fatalf("first invoke: %v", err)
+	}
+	if len(first.Interrupts) != 1 {
+		t.Fatalf("expected 1 interrupt on first invoke, got %d", len(first.Interrupts))
+	}
+
+	secondCfg := Config{
+		ThreadID:     "resume-sequential",
+		Checkpointer: saver,
+		Metadata: map[string]any{
+			ConfigKeyResumeMap: map[string]any{first.Interrupts[0].ID: "one"},
+		},
+	}
+	second, err := compiled.Invoke(WithConfig(context.Background(), secondCfg), map[string]any{})
+	if err != nil {
+		t.Fatalf("second invoke: %v", err)
+	}
+	if len(second.Interrupts) != 1 {
+		t.Fatalf("expected 1 interrupt on second invoke, got %d", len(second.Interrupts))
+	}
+
+	thirdCfg := Config{
+		ThreadID:     "resume-sequential",
+		Checkpointer: saver,
+		Metadata: map[string]any{
+			ConfigKeyResumeMap: map[string]any{second.Interrupts[0].ID: "two"},
+		},
+	}
+	third, err := compiled.Invoke(WithConfig(context.Background(), thirdCfg), map[string]any{})
+	if err != nil {
+		t.Fatalf("third invoke: %v", err)
+	}
+	if len(third.Interrupts) != 0 {
+		t.Fatalf("expected no interrupts after second resume, got %d", len(third.Interrupts))
+	}
+	state, ok := third.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map output, got %T", third.Value)
+	}
+	if got := state["a1"]; got != "one" {
+		t.Fatalf("a1 = %v, want one", got)
+	}
+	if got := state["a2"]; got != "two" {
+		t.Fatalf("a2 = %v, want two", got)
+	}
+	if got := state["done"]; got != true {
+		t.Fatalf("done = %v, want true", got)
+	}
+
+	fourthCfg := Config{ThreadID: "resume-sequential", Checkpointer: saver}
+	fourth, err := compiled.Invoke(WithConfig(context.Background(), fourthCfg), map[string]any{})
+	if err != nil {
+		t.Fatalf("fourth invoke: %v", err)
+	}
+	if len(fourth.Interrupts) != 0 {
+		t.Fatalf("expected no interrupts after completion, got %d", len(fourth.Interrupts))
+	}
+}
+
 func TestPregelLoop_ResumeRequiresMapWhenMultiplePendingInterrupts(t *testing.T) {
 	saver := checkpoint.NewInMemorySaver()
 	g := NewStateGraph[map[string]any]()

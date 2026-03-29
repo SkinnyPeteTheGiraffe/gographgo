@@ -12,18 +12,21 @@ import (
 // Thread-scoped fields (ThreadID, CheckpointID, CheckpointNS) are used by
 // checkpoint-aware graphs. At minimum, set ThreadID to enable persistence.
 type Config struct {
-	Checkpointer   checkpoint.Saver
-	Store          any
-	Cache          any
-	Metadata       map[string]any
-	ThreadID       string
-	CheckpointID   string
-	CheckpointNS   string
-	Durability     DurabilityMode
-	RecursionLimit int
-	StepTimeout    time.Duration
-	MaxConcurrency int
-	Debug          bool
+	Checkpointer    checkpoint.Saver
+	CheckpointStore CheckpointStore
+	StateStore      StateStore
+	Store           any
+	Cache           any
+	Metadata        map[string]any
+	ThreadID        string
+	CheckpointID    string
+	CheckpointNS    string
+	StateMode       StateStoreMode
+	Durability      DurabilityMode
+	RecursionLimit  int
+	StepTimeout     time.Duration
+	MaxConcurrency  int
+	Debug           bool
 }
 
 // DefaultConfig returns a Config with sensible defaults.

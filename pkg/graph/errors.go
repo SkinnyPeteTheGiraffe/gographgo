@@ -151,3 +151,24 @@ func (e *TaskNotFound) Error() string {
 	}
 	return "task not found"
 }
+
+// ExternalStateConflictError is raised when a checkpoint resume/replay request
+// no longer matches the externally authoritative state version.
+type ExternalStateConflictError struct {
+	ThreadID          string
+	CheckpointID      string
+	CheckpointNS      string
+	CheckpointVersion string
+	ExternalVersion   string
+}
+
+func (e *ExternalStateConflictError) Error() string {
+	return fmt.Sprintf(
+		"external state conflict for thread %q checkpoint %q (ns=%q): checkpoint version %q does not match external version %q",
+		e.ThreadID,
+		e.CheckpointID,
+		e.CheckpointNS,
+		e.CheckpointVersion,
+		e.ExternalVersion,
+	)
+}

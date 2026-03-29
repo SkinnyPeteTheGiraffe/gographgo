@@ -36,7 +36,9 @@ type pregelLoopOptions[State, Context, Input, Output any] struct {
 type pregelLoopState[State any] struct {
 	tasks                []pregelTask[State]
 	pendingWrites        []checkpoint.PendingWrite
+	resumedTaskIDs       map[string]struct{}
 	interrupts           []Interrupt
+	externalStateVersion string
 	channelVersions      map[string]int64
 	versionsSeen         map[string]map[string]int64
 	prevNodes            []string
@@ -46,6 +48,11 @@ type pregelLoopState[State any] struct {
 	hasResume            bool
 	isReplaying          bool
 	allowDynamicChannels bool
+}
+
+type resolvedStateAuthority struct {
+	mode       StateStoreMode
+	stateStore StateStore
 }
 
 func (s *pregelLoopState[State]) bumpChannelVersion(channel string) {
@@ -77,12 +84,20 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 	g := opts.graph
 	config := opts.config
 	baseNamespace := splitCheckpointNamespace(config.CheckpointNS)
+	authority, err := resolveStateAuthority(config)
+	if err != nil {
+		return pregelLoopResult{}, err
+	}
 
 	runtimeSchema := runtimeChannelSchema(g)
 	channels := newPregelChannelMap(runtimeSchema)
 	allowDynamicChannels := allowsDynamicStateChannels[State]()
 	requestedCheckpointID := config.CheckpointID
-	loadedTuple, pendingWrites, restoredChannels, err := loadPregelCheckpointState(ctx, runtimeSchema, &config)
+	loadedTuple, pendingWrites, restoredChannels, err := loadPregelCheckpointState(ctx, runtimeSchema, &config, authority)
+	if err != nil {
+		return pregelLoopResult{}, err
+	}
+	authoritativeState, err := loadAuthoritativeStateIfNeeded(ctx, authority, config)
 	if err != nil {
 		return pregelLoopResult{}, err
 	}
@@ -96,9 +111,15 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 		allowDynamicChannels: allowDynamicChannels,
 	}
 	initializeLoopStateFromCheckpoint(&loopState, requestedCheckpointID, loadedTuple)
-	pendingWrites, err = configureLoopResumeAndInput(channels, pendingWrites, opts.input, config, &loopState)
+	pendingWrites, err = configureLoopResumeAndInput(channels, pendingWrites, opts.input, config, authoritativeState, &loopState)
 	if err != nil {
 		return pregelLoopResult{}, err
+	}
+	if authoritativeState != nil {
+		loopState.externalStateVersion = authoritativeState.Version
+		if err := validateAuthoritativeStateConsistency(config, loadedTuple, authoritativeState, loopState.hasResume, loopState.isReplaying); err != nil {
+			return pregelLoopResult{}, err
+		}
 	}
 	initializeLoopVersionCounter(channels, &loopState)
 
@@ -108,7 +129,7 @@ func runPregelLoop[State, Context, Input, Output any](ctx context.Context, opts 
 		return pregelLoopResult{}, fmt.Errorf("preparing initial tasks: %w", err)
 	}
 	if loopState.hasResume {
-		if resumed := prepareResumedTasks(g, config, channels, pendingWrites); len(resumed) > 0 {
+		if resumed := prepareResumedTasks(g, config, channels, pendingWrites, loopState.resumedTaskIDs); len(resumed) > 0 {
 			tasks = resumed
 		}
 	}
@@ -149,7 +170,7 @@ func finalizePregelLoop[State, Context, Input, Output any](
 		if durability == DurabilityAsync {
 			asyncCheckpoint.Wait()
 		}
-		saveCheckpoint(ctx, config, channels, loopState.step, loopState.channelVersions, loopState.versionsSeen, loopState.lastUpdatedChannels, nil, loopState.pendingWrites, opts.streamOut, opts.streamModes, baseNamespace)
+		saveCheckpoint(ctx, config, channels, loopState.step, loopState.channelVersions, loopState.versionsSeen, loopState.lastUpdatedChannels, nil, loopState.pendingWrites, loopState.externalStateVersion, opts.streamOut, opts.streamModes, baseNamespace)
 	}
 	channels.finishAll()
 	state, err := stateFromChannels[State](channels)
@@ -175,6 +196,7 @@ func loadPregelCheckpointState(
 	ctx context.Context,
 	runtimeSchema map[string]Channel,
 	config *Config,
+	authority resolvedStateAuthority,
 ) (tuple *checkpoint.CheckpointTuple, pendingWrites []checkpoint.PendingWrite, channels *pregelChannelMap, err error) {
 	if config == nil || config.Checkpointer == nil || config.ThreadID == "" {
 		return nil, nil, nil, nil
@@ -186,9 +208,13 @@ func loadPregelCheckpointState(
 	if tuple == nil || tuple.Checkpoint == nil {
 		return tuple, nil, nil, nil
 	}
-	restored, restoreErr := restoreFromCheckpoint(runtimeSchema, tuple.Checkpoint.ChannelValues)
-	if restoreErr != nil {
-		return nil, nil, nil, fmt.Errorf("restoring checkpoint channels: %w", restoreErr)
+	var restored *pregelChannelMap
+	if !isAuthoritativeExternalStateMode(authority.mode) {
+		var restoreErr error
+		restored, restoreErr = restoreFromCheckpoint(runtimeSchema, tuple.Checkpoint.ChannelValues)
+		if restoreErr != nil {
+			return nil, nil, nil, fmt.Errorf("restoring checkpoint channels: %w", restoreErr)
+		}
 	}
 	pendingWrites = append(pendingWrites, tuple.PendingWrites...)
 	if tuple.Config != nil && tuple.Config.CheckpointID != "" {
@@ -221,6 +247,7 @@ func configureLoopResumeAndInput[State, Input any](
 	pendingWrites []checkpoint.PendingWrite,
 	input Input,
 	config Config,
+	authoritativeState *AuthoritativeStateSnapshot,
 	state *pregelLoopState[State],
 ) ([]checkpoint.PendingWrite, error) {
 	resumeMap, resumeVals, hasResume, err := resumeConfig(config.Metadata)
@@ -230,11 +257,16 @@ func configureLoopResumeAndInput[State, Input any](
 	if hasResume && (config.Checkpointer == nil || config.ThreadID == "") {
 		return nil, fmt.Errorf("interrupt resume requires a checkpointer and thread id")
 	}
-	pendingWrites, _, err = applyResumeWrites(pendingWrites, resumeMap, resumeVals)
+	var resumedTaskIDs map[string]struct{}
+	pendingWrites, resumedTaskIDs, err = applyResumeWrites(pendingWrites, resumeMap, resumeVals)
 	if err != nil {
 		return nil, err
 	}
-	if !hasResume && !state.isReplaying {
+	if authoritativeState != nil {
+		if err := mapInputToChannels(channels, authoritativeState.Values); err != nil {
+			return nil, fmt.Errorf("mapping authoritative state to channels: %w", err)
+		}
+	} else if !hasResume && !state.isReplaying {
 		if err := mapInputToChannels(channels, any(input)); err != nil {
 			return nil, fmt.Errorf("mapping input to channels: %w", err)
 		}
@@ -246,6 +278,7 @@ func configureLoopResumeAndInput[State, Input any](
 		state.versionsSeen[pregelInterrupt] = seen
 	}
 	state.hasResume = hasResume
+	state.resumedTaskIDs = resumedTaskIDs
 	return pendingWrites, nil
 }
 
@@ -463,7 +496,7 @@ func handlePregelTaskError[State, Context, Input, Output any](
 		if durability == DurabilityAsync {
 			asyncCheckpoint.Wait()
 		}
-		saveCheckpoint(ctx, config, channels, state.step, state.channelVersions, state.versionsSeen, nil, nil, state.pendingWrites, opts.streamOut, opts.streamModes, splitCheckpointNamespace(config.CheckpointNS))
+		saveCheckpoint(ctx, config, channels, state.step, state.channelVersions, state.versionsSeen, nil, nil, state.pendingWrites, state.externalStateVersion, opts.streamOut, opts.streamModes, splitCheckpointNamespace(config.CheckpointNS))
 	}
 	return taskErr
 }
@@ -540,17 +573,18 @@ func advancePregelStep[State, Context, Input, Output any](
 	}
 	checkpointChanged := mergeChangedChannels(updated, finished)
 	checkpointByDurability(ctx, durability, asyncCheckpoint, checkpointSnapshot{
-		config:          &config,
-		channels:        channels,
-		step:            state.step,
-		channelVersions: state.channelVersions,
-		versionsSeen:    state.versionsSeen,
-		updatedChannels: updatedChannelsFromChanged(checkpointChanged),
-		next:            nextNodeNames(state.tasks),
-		pendingWrites:   state.pendingWrites,
-		streamOut:       opts.streamOut,
-		streamModes:     opts.streamModes,
-		namespace:       baseNamespace,
+		config:               &config,
+		channels:             channels,
+		step:                 state.step,
+		channelVersions:      state.channelVersions,
+		versionsSeen:         state.versionsSeen,
+		updatedChannels:      updatedChannelsFromChanged(checkpointChanged),
+		next:                 nextNodeNames(state.tasks),
+		pendingWrites:        state.pendingWrites,
+		externalStateVersion: state.externalStateVersion,
+		streamOut:            opts.streamOut,
+		streamModes:          opts.streamModes,
+		namespace:            baseNamespace,
 	})
 	return nil
 }
@@ -1401,6 +1435,7 @@ func saveCheckpoint(
 	updatedChannels []string,
 	next []string,
 	pendingWrites []checkpoint.PendingWrite,
+	externalStateVersion string,
 	streamOut chan<- StreamPart,
 	streamModes streamModeSet,
 	namespace []string,
@@ -1422,6 +1457,9 @@ func saveCheckpoint(
 	meta := &checkpoint.CheckpointMetadata{
 		Source: "loop",
 		Step:   step,
+	}
+	if strings.TrimSpace(externalStateVersion) != "" {
+		meta.Extra = map[string]any{ExternalStateVersionMetadataKey: externalStateVersion}
 	}
 	nextCfg, err := config.Checkpointer.Put(ctx, cpCfg, cp, meta)
 	if err != nil {
@@ -1449,17 +1487,18 @@ func saveCheckpoint(
 }
 
 type checkpointSnapshot struct {
-	config          *Config
-	channels        *pregelChannelMap
-	channelVersions map[string]int64
-	versionsSeen    map[string]map[string]int64
-	streamOut       chan<- StreamPart
-	streamModes     streamModeSet
-	updatedChannels []string
-	next            []string
-	pendingWrites   []checkpoint.PendingWrite
-	namespace       []string
-	step            int
+	config               *Config
+	channels             *pregelChannelMap
+	channelVersions      map[string]int64
+	versionsSeen         map[string]map[string]int64
+	streamOut            chan<- StreamPart
+	streamModes          streamModeSet
+	updatedChannels      []string
+	next                 []string
+	pendingWrites        []checkpoint.PendingWrite
+	externalStateVersion string
+	namespace            []string
+	step                 int
 }
 
 type checkpointAsyncWriter struct {
@@ -1494,12 +1533,13 @@ func checkpointByDurability(ctx context.Context, durability DurabilityMode, writ
 		updatedChannelsCopy := append([]string(nil), snap.updatedChannels...)
 		nextCopy := append([]string(nil), snap.next...)
 		pendingWritesCopy := clonePendingWrites(snap.pendingWrites)
+		externalStateVersion := snap.externalStateVersion
 		namespaceCopy := append([]string(nil), snap.namespace...)
 		writer.Submit(func() {
-			saveCheckpointFromSnapshot(ctx, configCopy, channelsCopy, snap.step, channelVersionsCopy, versionsSeenCopy, updatedChannelsCopy, nextCopy, pendingWritesCopy, snap.streamOut, snap.streamModes, namespaceCopy)
+			saveCheckpointFromSnapshot(ctx, configCopy, channelsCopy, snap.step, channelVersionsCopy, versionsSeenCopy, updatedChannelsCopy, nextCopy, pendingWritesCopy, externalStateVersion, snap.streamOut, snap.streamModes, namespaceCopy)
 		})
 	default:
-		saveCheckpoint(ctx, *snap.config, snap.channels, snap.step, snap.channelVersions, snap.versionsSeen, snap.updatedChannels, snap.next, snap.pendingWrites, snap.streamOut, snap.streamModes, snap.namespace)
+		saveCheckpoint(ctx, *snap.config, snap.channels, snap.step, snap.channelVersions, snap.versionsSeen, snap.updatedChannels, snap.next, snap.pendingWrites, snap.externalStateVersion, snap.streamOut, snap.streamModes, snap.namespace)
 	}
 }
 
@@ -1513,6 +1553,7 @@ func saveCheckpointFromSnapshot(
 	updatedChannels []string,
 	next []string,
 	pendingWrites []checkpoint.PendingWrite,
+	externalStateVersion string,
 	streamOut chan<- StreamPart,
 	streamModes streamModeSet,
 	namespace []string,
@@ -1533,6 +1574,9 @@ func saveCheckpointFromSnapshot(
 	meta := &checkpoint.CheckpointMetadata{
 		Source: "loop",
 		Step:   step,
+	}
+	if strings.TrimSpace(externalStateVersion) != "" {
+		meta.Extra = map[string]any{ExternalStateVersionMetadataKey: externalStateVersion}
 	}
 	nextCfg, err := config.Checkpointer.Put(ctx, cpCfg, cp, meta)
 	if err != nil {
@@ -1691,6 +1735,108 @@ func markTaskVersionsSeen[State any](task pregelTask[State], channelVersions map
 	versionsSeen[task.name] = seen
 }
 
+func resolveStateAuthority(config Config) (resolvedStateAuthority, error) {
+	mode := effectiveStateMode(config)
+	stateStore := config.StateStore
+	if config.CheckpointStore != nil {
+		if stateStore == nil {
+			stateStore = config.CheckpointStore.StateStore()
+		}
+		if mode == "" {
+			mode = config.CheckpointStore.Mode()
+		}
+	}
+	if mode == "" {
+		mode = StateStoreModeCheckpointAuthoritative
+	}
+
+	resolved := resolvedStateAuthority{mode: mode, stateStore: stateStore}
+	if !isAuthoritativeExternalStateMode(mode) {
+		return resolved, nil
+	}
+	if config.Checkpointer == nil {
+		return resolvedStateAuthority{}, fmt.Errorf("authoritative_external_state mode requires a checkpointer")
+	}
+	if strings.TrimSpace(config.ThreadID) == "" {
+		return resolvedStateAuthority{}, fmt.Errorf("authoritative_external_state mode requires Config.ThreadID")
+	}
+	if stateStore == nil {
+		return resolvedStateAuthority{}, fmt.Errorf("authoritative_external_state mode requires Config.StateStore or Config.CheckpointStore.StateStore")
+	}
+	return resolved, nil
+}
+
+func loadAuthoritativeStateIfNeeded(ctx context.Context, authority resolvedStateAuthority, config Config) (*AuthoritativeStateSnapshot, error) {
+	if !isAuthoritativeExternalStateMode(authority.mode) {
+		return nil, nil
+	}
+	if authority.stateStore == nil {
+		return nil, fmt.Errorf("authoritative_external_state mode requires a state store")
+	}
+	snapshot, err := authority.stateStore.Read(ctx, StateStoreReadRequest{
+		ThreadID:     config.ThreadID,
+		CheckpointID: config.CheckpointID,
+		CheckpointNS: config.CheckpointNS,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("loading authoritative state: %w", err)
+	}
+	if snapshot == nil {
+		return nil, fmt.Errorf("authoritative_external_state mode requires state store to return a snapshot")
+	}
+	if strings.TrimSpace(snapshot.Version) == "" {
+		return nil, fmt.Errorf("authoritative_external_state mode requires state store snapshot version")
+	}
+	if snapshot.Values == nil {
+		snapshot.Values = map[string]any{}
+	}
+	return snapshot, nil
+}
+
+func validateAuthoritativeStateConsistency(
+	config Config,
+	tuple *checkpoint.CheckpointTuple,
+	snapshot *AuthoritativeStateSnapshot,
+	hasResume bool,
+	isReplaying bool,
+) error {
+	if snapshot == nil || (!hasResume && !isReplaying) {
+		return nil
+	}
+	if tuple == nil || tuple.Checkpoint == nil {
+		return nil
+	}
+	checkpointVersion := checkpointExternalStateVersion(tuple.Metadata)
+	if checkpointVersion == snapshot.Version {
+		return nil
+	}
+	checkpointID := ""
+	if tuple.Checkpoint != nil {
+		checkpointID = tuple.Checkpoint.ID
+	}
+	return &ExternalStateConflictError{
+		ThreadID:          config.ThreadID,
+		CheckpointID:      checkpointID,
+		CheckpointNS:      config.CheckpointNS,
+		CheckpointVersion: checkpointVersion,
+		ExternalVersion:   snapshot.Version,
+	}
+}
+
+func checkpointExternalStateVersion(meta *checkpoint.CheckpointMetadata) string {
+	if meta == nil || len(meta.Extra) == 0 {
+		return ""
+	}
+	raw, ok := meta.Extra[ExternalStateVersionMetadataKey]
+	if !ok || raw == nil {
+		return ""
+	}
+	if s, ok := raw.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return strings.TrimSpace(fmt.Sprint(raw))
+}
+
 func checkpointVersionMap(in map[string]int64) map[string]checkpoint.Version {
 	out := make(map[string]checkpoint.Version, len(in))
 	for k, v := range in {
@@ -1833,6 +1979,9 @@ func checkpointStreamPayload(cp *checkpoint.Checkpoint, meta *checkpoint.Checkpo
 	if meta != nil {
 		metadata["source"] = meta.Source
 		metadata["step"] = meta.Step
+		if version := checkpointExternalStateVersion(meta); version != "" {
+			metadata[ExternalStateVersionMetadataKey] = version
+		}
 		if meta.RunID != "" {
 			metadata["run_id"] = meta.RunID
 		}
